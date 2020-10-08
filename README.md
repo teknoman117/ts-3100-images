@@ -12,3 +12,6 @@ an external EEPROM so I could restore the contents of the flash.
 As a bonus, I can now experiment with my own images on the device without fear of not being able to
 restore them in the future.
 
+Rust Image
+----------
+A rust program runtime which can run on bare metal on the TS-3100.
