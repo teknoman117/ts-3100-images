@@ -1,0 +1,154 @@
+# reset vector for x86 processors
+.section .reset, "ax"
+.global _reset
+.code16
+
+_reset:
+    ljmp $0xF000, $_start
+    .byte 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+
+# initial real mode section
+.section .init16, "ax"
+.code16
+.align 8
+_gdtinfo:
+    .word gdt_size - 1
+    .long gdt
+
+.align 8
+_start:
+    # --- Setup initial state (replace eventually) ---
+
+    # Point data segments at code segments
+    movw %cs, %ax
+    movw %ax, %ds
+    movw %ax, %es
+
+    # Enable "Extended I/O Space" -> in short, the 386EX internal peripherals
+    movw $0x8000, %ax
+    outb %al, $0x23
+    xchgb %ah, %al
+    outb %al, $0x22
+    outw %ax, $0x22
+
+    # Map all I/O in both DOS and Extended regions
+    xorw %ax, %ax
+    outb %al, $0x22
+
+    # Disable watchdog timer
+    movw $0xF4CA, %dx
+    movb $0x01, %al
+    outb %al, %dx
+
+    # IO port configuration
+    movw $0xF862, %dx
+    movb $0, %al
+    outb %al, (%dx)
+    movw $0xF86A, %dx
+    movb $0x1F, %al
+    outb %al, (%dx)
+    movw $0xF872, %dx
+    movb $0x44, %al
+    outb %al, (%dx)
+    movw $0xF864, %dx
+    movb $0xBD, %al
+    outb %al, (%dx)
+    movw $0xF86C, %dx
+    movb $0x10, %al
+    outb %al, (%dx)
+    movw $0xF874, %dx
+    movb $0x44, %al
+    outb %al, (%dx)
+    movw $0xF820, %dx
+    movb $0, %al
+    outb %al, (%dx)
+    movw $0xF822, %dx
+    movb $0xFF, %al
+    outb %al, (%dx)
+    movw $0xF824, %dx
+    movb $0xBB, %al
+    outb %al, (%dx)
+
+    # setup serial pins
+    movw $0xF826, %dx
+    movb $0x3f, %al
+    outb %al, (%dx)
+
+    # setup serial clocking
+    movw $0xF836, %dx
+    movb $0x40, %al
+    outb %al, (%dx)
+
+    # --- ----------------------------------------------
+
+    # load gdt
+    lgdtl %ds:(_gdtinfo)
+
+    # switch into protected mode (short jump to flush prefetcher)
+    movl %cr0, %eax
+    orl $0x01, %eax
+    movl %eax, %cr0
+    jmp _start.descriptors
+
+_start.descriptors:
+    # install data descriptors
+    movw $0x10, %ax
+    movw %ax, %ds
+    movw %ax, %es
+    movw %ax, %fs
+    movw %ax, %gs
+    movw %ax, %ss
+
+    # install code descriptor
+    ljmpl $0x08, $_protected
+
+.section .init32, "ax"
+.code32
+_protected:
+
+    # relocate rom to normal region
+    # Change UCS to 0340_0000 -> 0340_1FFF
+    # 11_0100_0000_0000_0[000_0000_0000]
+    # mask
+    # (0000_00) 00_0000_0000_0001_1[111_1111_1111]
+
+    movw $0xF43A, %dx # UCSADH
+    movw $0x0340, %ax
+    outw %ax, (%dx)
+    movw $0xF438, %dx # UCSADL
+    movw $0x0505, %ax
+    outw %ax, (%dx)
+    movw $0xF43E, %dx # UCSMSKH
+    movw $0x0000, %ax
+    outw %ax, (%dx)
+    movw $0xF43C, %dx # UCSMSKL
+    movw $0x1C01, %ax
+    outw %ax, (%dx)
+
+    # initialize registers
+    xorl %eax, %eax
+    xorl %ebx, %ebx
+    xorl %ecx, %ecx
+    xorl %edx, %edx
+    xorl %esi, %esi
+    xorl %edi, %edi
+
+    movl $__ram_end, %esp
+    movl %esp, %ebp
+    jmp main
+
+# global descriptor table
+.section .gdt, "a"
+.global gdtinfo
+.code32
+gdt:
+    nulldesc: .byte 0, 0, 0, 0, 0, 0, 0, 0
+    # limits is (size - 1)
+    # format (db limit[7:0], limit[15:8], base[7:0], base[15:8], base[23:16], access byte, {flags, limit[19:16]}, base[31:24])
+    # 0008: code descriptor for whole (flat) memory
+    # flatcode: .byte 0xff, 0xff, 0x00, 0x00, 0x00, 10011010b, 11001111b, 0x00
+    code: .byte 0xff, 0xff, 0x00, 0x00, 0x00, 0x9A, 0xCF, 0x00
+    # 0010: data descriptor for whole (flat) memory
+    # flatdata: .byte 0xff, 0xff, 0x00, 0x00, 0x00, 10010010b, 11001111b, 0x00
+    data: .byte 0xff, 0xff, 0x00, 0x00, 0x00, 0x92, 0xCF, 0x00
+.equ gdt_size, .-gdt
