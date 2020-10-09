@@ -12,6 +12,7 @@ fn panic(_info: &PanicInfo) -> ! {
     loop {}
 }
 
+// read an 8 bit I/O port
 fn ioread8(addr : u16) -> u8 {
     unsafe {
         let data;
@@ -20,12 +21,14 @@ fn ioread8(addr : u16) -> u8 {
     }
 }
 
+// write to an 8 bit I/O port
 fn iowrite8(addr : u16, data : u8) {
     unsafe {
         asm!("out dx, al", in ("dx") addr, in("al") data, options(nomem, nostack));
     }
 }
 
+// set bits in an 8 bit I/O port
 fn iosetbits8(addr : u16, bits : u8) {
     unsafe {
         asm!(
@@ -40,6 +43,7 @@ fn iosetbits8(addr : u16, bits : u8) {
     }
 }
 
+// clear bits in an 8 bit I/O port
 fn ioclearbits8(addr : u16, bits : u8) {
     unsafe {
         asm!(
@@ -54,12 +58,14 @@ fn ioclearbits8(addr : u16, bits : u8) {
     }
 }
 
+// write to a 16 bit I/O port
 fn iowrite16(addr : u16, data : u16) {
     unsafe {
         asm!("out dx, ax", in ("dx") addr, in("ax") data, options(nomem, nostack));
     }
 }
 
+// read from a 16 bit I/O port
 /*fn ioread16(addr : u16) -> u16 {
     unsafe {
         let data;
@@ -68,6 +74,7 @@ fn iowrite16(addr : u16, data : u16) {
     }
 }*/
 
+// set the state of the onboard led
 fn set_led(on : bool) {
     match on {
         false => iosetbits8(0xF862, 0x40u8),
@@ -75,77 +82,106 @@ fn set_led(on : bool) {
     };
 }
 
-fn com2_setbaud(baudrate: u32) {
-    let divisor = 50000000u32 / (baudrate * 16u32 * 27u32);
+// basic types which represent the base addresses of 16450 serial ports
+struct COM1 {}
+struct COM2 {}
 
-    iosetbits8(0x2FB, 0x80);
-    iowrite8(0x2FB, 0x80);
-    iowrite8(0x2F8, (divisor & 0xff) as u8);
-    iowrite8(0x2F9, ((divisor >> 8) & 0xff) as u8);
-    ioclearbits8(0x2FB, 0x80);
+trait COMBaseAddress {
+    fn register(offset: u16) -> u16;
 }
 
-fn com2_writechar(c: u8) {
-    iowrite8(0x2F8, c as u8);
-    while (ioread8(0x2FD) & 0x20) == 0 { }
-}
-
-fn com2_readchar() -> Result<u8, u8> {
-    // wait for something on the input
-    let mut status = 0;
-    while status == 0 {
-        status = ioread8(0x2FD) & 0x8B;
-    }
-
-    // return character if it wasn't an error
-    match status & 0x8A {
-        0 => Ok(ioread8(0x2F8)),
-        _ => Err(status)
+impl COMBaseAddress for COM1 {
+    fn register(offset : u16) -> u16 {
+        0x3f8 + offset
     }
 }
 
-fn com2_readu8() -> Option<u8> {
-    let mut buf : [u8; 3] = [0; 3];
-    let mut length = 0;
+impl COMBaseAddress for COM2 {
+    fn register(offset : u16) -> u16 {
+        0x2f8 + offset
+    }
+}
 
-    // fetch a string
-    let mut character = Some(0);
-    while let Some(_) = character {
-        character = match com2_readchar() {
-            Ok(c) => match c {
-                13 => None,
-                _ => {
-                    buf[length] = c;
-                    length = length + 1;
-                    if length < buf.len() {
-                        Some(c)
-                    } else {
-                        None
+// wraps some core functions of a com port
+struct COM<Port> {
+    phantom: core::marker::PhantomData<Port>
+}
+
+impl<Port> COM<Port> where Port : COMBaseAddress {
+    fn setup(baudrate: u32) {
+        let divisor = 50000000u32 / (baudrate * 16u32 * 27u32);
+
+        iowrite8(/*0x2F9*/ Port::register(1), 0x00);
+        iowrite8(/*0x2FB*/ Port::register(3), 0x80);
+        iowrite8(/*0x2F8*/ Port::register(0), (divisor & 0xff) as u8);
+        iowrite8(/*0x2F9*/ Port::register(1), ((divisor >> 8) & 0xff) as u8);
+        iowrite8(/*0x2FB*/ Port::register(3), 0x03);
+        iowrite8(/*0x2FC*/ Port::register(4), 0x08);
+    }
+
+    fn writechar(c: u8) {
+        iowrite8(/*0x2F8*/ Port::register(0), c as u8);
+        while (ioread8(/*0x2FD*/ Port::register(5)) & 0x20) == 0 { }
+    }
+
+    fn readchar() -> Result<u8, u8> {
+        // wait for something on the input
+        let mut status = 0;
+        while status == 0 {
+            status = ioread8(/*0x2FD*/ Port::register(5)) & 0x8B;
+        }
+
+        // return character if it wasn't an error
+        match status & 0x8A {
+            0 => Ok(ioread8(/*0x2F8*/ Port::register(0))),
+            _ => Err(status)
+        }
+    }
+
+    fn readu8() -> Option<u8> {
+        let mut buf : [u8; 3] = [0; 3];
+        let mut length = 0;
+
+        // fetch a string
+        let mut character = Some(0);
+        while let Some(_) = character {
+            character = match COM::<Port>::readchar() {
+                Ok(c) => match c {
+                    13 => None,
+                    _ => {
+                        buf[length] = c;
+                        length = length + 1;
+                        if length < buf.len() {
+                            Some(c)
+                        } else {
+                            None
+                        }
                     }
+                }
+                Err(_) => None
+            }
+        }
+
+        // convert to a u8
+        match core::str::from_utf8(&buf[0..length]) {
+            Ok(s) => {
+                match u8::from_str(s) {
+                    Ok(v) => Some(v),
+                    Err(_) => None
                 }
             }
             Err(_) => None
         }
     }
-
-    // convert to a u8
-    match core::str::from_utf8(&buf[0..length]) {
-        Ok(s) => {
-            match u8::from_str(s) {
-                Ok(v) => Some(v),
-                Err(_) => None
-            }
-        }
-        Err(_) => None
-    }
 }
 
+// tools to allow println! on the serial port
 struct Console {}
 
 impl fmt::Write for Console {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         for c in s.chars() {
-            com2_writechar(c as u8);
+            COM::<COM2>::writechar(c as u8);
         }
         Ok(())
     }
@@ -172,6 +208,7 @@ pub fn _print(args: fmt::Arguments) {
     }
 }
 
+// tools to manipulate the DS1687 RTC
 fn read_rtc(address : u8) -> u8 {
     iowrite8(0x70, address);
     ioread8(0x71)
@@ -228,32 +265,32 @@ fn settime_rtc() {
 
     // update clock
     print!("year? ");
-    if let Some(year) = com2_readu8() {
+    if let Some(year) = COM::<COM2>::readu8() {
         write_rtc(0x9, year);
     }
 
     print!("month? ");
-    if let Some(month) = com2_readu8() {
+    if let Some(month) = COM::<COM2>::readu8() {
         write_rtc(0x8, month);
     }
 
     print!("day? ");
-    if let Some(day) = com2_readu8() {
+    if let Some(day) = COM::<COM2>::readu8() {
         write_rtc(0x7, day);
     }
 
     print!("hour? ");
-    if let Some(hour) = com2_readu8() {
+    if let Some(hour) = COM::<COM2>::readu8() {
         write_rtc(0x4, hour);
     }
 
     print!("minute? ");
-    if let Some(minute) = com2_readu8() {
+    if let Some(minute) = COM::<COM2>::readu8() {
         write_rtc(0x2, minute);
     }
 
     print!("second? ");
-    if let Some(second) = com2_readu8() {
+    if let Some(second) = COM::<COM2>::readu8() {
         write_rtc(0x0, second);
     }
 
@@ -271,17 +308,13 @@ pub extern "C" fn main() -> ! {
     map_rtc();
 
     // setup 115200 8n1 with no interrupts
-    iowrite8(0x2F9, 0x00);
-    com2_setbaud(115200);
-    iowrite8(0x2FB, 0x03);
-    iowrite8(0x2FC, 0x08);
-
-    // print a string maybe?
+    COM::<COM1>::setup(115200);
+    COM::<COM2>::setup(115200);
     println!("Rust on i386EX Demo!");
 
     // allow programming the rtc
     println!("set data and time? [y/n]");
-    if let Ok(c) = com2_readchar() {
+    if let Ok(c) = COM::<COM2>::readchar() {
         match c as char {
             'Y' | 'y' => settime_rtc(),
             _ => {}
@@ -290,7 +323,7 @@ pub extern "C" fn main() -> ! {
 
     // print out the characters we receive on the serial port!
     loop {
-        match com2_readchar() {
+        match COM::<COM2>::readchar() {
             Ok(c) => {
                 // TODO: uncommenting goes over ROM budget
                 //println!("Got a char: \'{}\', hex: 0x{:x}, value: {}", c as char, c, c);
