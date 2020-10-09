@@ -3,10 +3,13 @@
 
 #![feature(asm)]
 
-use core::panic::PanicInfo;
-use core::fmt::{self, Write};
-use core::str::FromStr;
+use core::convert::Infallible;
 use core::marker::PhantomData;
+use core::panic::PanicInfo;
+use core::str::FromStr;
+
+//use ufmt_write::uWrite;
+use ufmt::{uWrite, uwrite, uwriteln};
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
@@ -109,7 +112,7 @@ struct COM<Port> {
 }
 
 impl<Port> COM<Port> where Port : COMBaseAddress {
-    fn setup(baudrate: u32) {
+    fn setup(baudrate: u32) -> COM<Port> {
         let divisor = 50000000u32 / (baudrate * 16u32 * 27u32);
 
         iowrite8(/*0x2F9*/ Port::register(1), 0x00);
@@ -118,14 +121,18 @@ impl<Port> COM<Port> where Port : COMBaseAddress {
         iowrite8(/*0x2F9*/ Port::register(1), ((divisor >> 8) & 0xff) as u8);
         iowrite8(/*0x2FB*/ Port::register(3), 0x03);
         iowrite8(/*0x2FC*/ Port::register(4), 0x08);
+
+        COM::<Port> {
+            phantom: PhantomData
+        }
     }
 
-    fn writechar(c: u8) {
+    fn writechar(&self, c: u8) {
         iowrite8(/*0x2F8*/ Port::register(0), c as u8);
         while (ioread8(/*0x2FD*/ Port::register(5)) & 0x20) == 0 { }
     }
 
-    fn readchar() -> Result<u8, u8> {
+    fn readchar(&self) -> Result<u8, u8> {
         // wait for something on the input
         let mut status = 0;
         while status == 0 {
@@ -139,14 +146,14 @@ impl<Port> COM<Port> where Port : COMBaseAddress {
         }
     }
 
-    fn readu8() -> Option<u8> {
+    fn readu8(&self) -> Option<u8> {
         let mut buf : [u8; 3] = [0; 3];
         let mut length = 0;
 
         // fetch a string
         let mut character = Some(0);
         while let Some(_) = character {
-            character = match COM::<Port>::readchar() {
+            character = match self.readchar() {
                 Ok(c) => match c {
                     13 => None,
                     _ => {
@@ -181,7 +188,7 @@ impl<Port> Iterator for COM<Port> where Port : COMBaseAddress {
     type Item = char;
 
     fn next(&mut self) -> Option<char> {
-        match COM::<Port>::readchar() {
+        match self.readchar() {
             Ok(c) => {
                 match c {
                     13 => None,
@@ -193,36 +200,14 @@ impl<Port> Iterator for COM<Port> where Port : COMBaseAddress {
     }
 }
 
-// tools to allow println! on the serial port
-struct Console {}
+impl<Port> uWrite for COM<Port> where Port : COMBaseAddress {
+    type Error = Infallible;
 
-impl fmt::Write for Console {
-    fn write_str(&mut self, s: &str) -> fmt::Result {
+    fn write_str(&mut self, s: &str) -> Result<(), Self::Error> {
         for c in s.chars() {
-            COM::<COM2>::writechar(c as u8);
+            self.writechar(c as u8);
         }
         Ok(())
-    }
-}
-
-// todo, use locking when we fix it
-static mut CONSOLE: Console = Console {};
-
-#[macro_export]
-macro_rules! print {
-    ($($arg:tt)*) => ($crate::_print(format_args!($($arg)*)));
-}
-
-#[macro_export]
-macro_rules! println {
-    () => ($crate::print!("\r\n"));
-    ($($arg:tt)*) => ($crate::print!("{}\r\n", format_args!($($arg)*)));
-}
-
-#[doc(hidden)]
-pub fn _print(args: fmt::Arguments) {
-    unsafe {
-        CONSOLE.write_fmt(args).unwrap();
     }
 }
 
@@ -258,7 +243,7 @@ fn map_rtc() {
     setbits_rtc(0xB, 0b0000_0110);
 }
 
-fn print_rtc() {
+fn print_rtc<Port>(uart: &mut COM<Port>) where Port : COMBaseAddress {
     // battery status string
     let battery_msg = match read_rtc(0xD) & 0x80 {
         0 => "DEAD",
@@ -268,47 +253,47 @@ fn print_rtc() {
     // lock the clock so it doesn't update
     setbits_rtc(0xB, 0b1000_0000);
 
-    println!("RTC (battery: {}): {}-{}-{} {}:{}:{}", battery_msg,
+    uwriteln!(uart, "RTC (battery: {}): {}-{}-{} {}:{}:{}", battery_msg,
         read_rtc(0x9), read_rtc(0x8), read_rtc(0x7),
-        read_rtc(0x4), read_rtc(0x2), read_rtc(0x0));
+        read_rtc(0x4), read_rtc(0x2), read_rtc(0x0)).ok();
 
     // unlock the clock
     clearbits_rtc(0xB, 0b1000_0000);
 }
 
-fn settime_rtc() {
+fn settime_rtc<Port>(uart: &mut COM<Port>) where Port : COMBaseAddress {
     // lock the clock so it doesn't update
     clearbits_rtc(0xA, 0b0111_0000);
     setbits_rtc(0xB, 0b1000_0000);
 
     // update clock
-    print!("year? ");
-    if let Some(year) = COM::<COM2>::readu8() {
+    uwrite!(uart, "year? ").ok();
+    if let Some(year) = uart.readu8() {
         write_rtc(0x9, year);
     }
 
-    print!("month? ");
-    if let Some(month) = COM::<COM2>::readu8() {
+    uwrite!(uart, "month? ").ok();
+    if let Some(month) = uart.readu8() {
         write_rtc(0x8, month);
     }
 
-    print!("day? ");
-    if let Some(day) = COM::<COM2>::readu8() {
+    uwrite!(uart, "day? ").ok();
+    if let Some(day) = uart.readu8() {
         write_rtc(0x7, day);
     }
 
-    print!("hour? ");
-    if let Some(hour) = COM::<COM2>::readu8() {
+    uwrite!(uart, "hour? ").ok();
+    if let Some(hour) = uart.readu8() {
         write_rtc(0x4, hour);
     }
 
-    print!("minute? ");
-    if let Some(minute) = COM::<COM2>::readu8() {
+    uwrite!(uart, "minute? ").ok();
+    if let Some(minute) = uart.readu8() {
         write_rtc(0x2, minute);
     }
 
-    print!("second? ");
-    if let Some(second) = COM::<COM2>::readu8() {
+    uwrite!(uart, "second? ").ok();
+    if let Some(second) = uart.readu8() {
         write_rtc(0x0, second);
     }
 
@@ -326,33 +311,32 @@ pub extern "C" fn main() -> ! {
     map_rtc();
 
     // setup 115200 8n1 with no interrupts
-    COM::<COM1>::setup(115200);
-    COM::<COM2>::setup(115200);
-    println!("Rust on i386EX Demo!");
+    let mut uart = COM::<COM2>::setup(115200);
+    uwriteln!(uart, "Rust on i386EX Demo!").ok();
 
     // allow programming the rtc
-    println!("set data and time? [y/n]");
-    if let Ok(c) = COM::<COM2>::readchar() {
+    uwriteln!(uart, "set data and time? [y/n]").ok();
+    if let Ok(c) = uart.readchar() {
         match c as char {
-            'Y' | 'y' => settime_rtc(),
+            'Y' | 'y' => settime_rtc(&mut uart),
             _ => {}
         }
     }
 
     // print out the characters we receive on the serial port!
     loop {
-        match COM::<COM2>::readchar() {
+        match uart.readchar() {
             Ok(c) => {
                 // TODO: uncommenting goes over ROM budget
-                //println!("Got a char: \'{}\', hex: 0x{:x}, value: {}", c as char, c, c);
+                //uwriteln!(uart, "Got a char: \'{}\', hex: 0x{:x}, value: {}", c as char, c, c).ok();
                 match c as char {
-                    'T' | 't' => print_rtc(),
+                    'T' | 't' => print_rtc(&mut uart),
                     'Y' | 'y' => set_led(true),
                     'N' | 'n' => set_led(false),
                     _ => {}
                 }
             },
-            Err(e) => println!("Got an error: 0x{:x}", e)
+            Err(e) => uwriteln!(uart, "Got an error: {}", e).unwrap()
         }
     }
 }
