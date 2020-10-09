@@ -105,25 +105,48 @@ _start.descriptors:
 .section .init32, "ax"
 .code32
 _protected:
+    # copy .rodata segment (to RORAM)
+    movl $__sirodata, %esi
+    movl $__srodata, %edi
+    movl $__rodata_size_dwords, %ecx
+    rep movsl %ds:(%esi), %es:(%edi)
 
     # relocate rom to normal region
+    # will disable access to RORAM region
     # Change UCS to 0340_0000 -> 0340_1FFF
     # 11_0100_0000_0000_0[000_0000_0000]
     # mask
     # (0000_00) 00_0000_0000_0001_1[111_1111_1111]
 
-    movw $0xF43A, %dx # UCSADH
+    # UCSADH
+    movw $0xF43A, %dx
     movw $0x0340, %ax
     outw %ax, (%dx)
-    movw $0xF438, %dx # UCSADL
+    # UCSADL
+    movw $0xF438, %dx
     movw $0x0505, %ax
     outw %ax, (%dx)
-    movw $0xF43E, %dx # UCSMSKH
-    movw $0x0000, %ax
+    # UCSMSKH
+    movw $0xF43E, %dx
+    # movw $0x0000, %ax
+    xorl %eax, %eax
     outw %ax, (%dx)
-    movw $0xF43C, %dx # UCSMSKL
+    # UCSMSKL
+    movw $0xF43C, %dx
     movw $0x1C01, %ax
     outw %ax, (%dx)
+
+    # zero .bss segment
+    movl $__sbss, %edi
+    movl $__bss_size_dwords, %ecx
+    xorl %eax, %eax
+    rep stos %eax, %es:(%edi)
+
+    # copy .data segment
+    movl $__sidata, %esi
+    movl $__sdata, %edi
+    movl $__data_size_dwords, %ecx
+    rep movsl %ds:(%esi), %es:(%edi)
 
     # initialize registers
     xorl %eax, %eax
@@ -133,7 +156,7 @@ _protected:
     xorl %esi, %esi
     xorl %edi, %edi
 
-    movl $__ram_end, %esp
+    movl $_stack_start, %esp
     movl %esp, %ebp
     jmp main
 
