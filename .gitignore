@@ -3,3 +3,4 @@ notes.s
 *.elf
 *.ihx
 *.bin
+target
