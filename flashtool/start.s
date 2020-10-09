@@ -304,24 +304,23 @@ start:
 
     # ------------------ SETUP CHIP SELECT UNITS ------------------
 
-    # Chip Select Unit 4 -> Flash Memory -> 0010_0000 -> 0017_FFFF
-    # FLASH_CS jumpered to DOC socket pin 22
-    # (0000_00) 00_0001_0000_0000_0[000_0000_0000]
+    # Chip Select Unit 4 -> DOC -> 000D_8000 -> 000D_9FFF
+    # (0000_00) 00_0000_1101_1000_0[000_0000_0000]
     # mask
-    # (0000_00) 00_0000_0111_1111_1[111_1111_1111]
+    # (0000_00) 00_0000_0000_0001_1[111_1111_1111]
 
-    mov dx, 0xF422 # CS4ADH
-    mov ax, 0x0010
-    out dx, ax
-    mov dx, 0xF420 # CS4ADL
-    mov ax, 0x0505
-    out dx, ax
-    mov dx, 0xF426 # CS4MSKH
-    mov ax, 0x0007
-    out dx, ax
-    mov dx, 0xF424 # CS4MSKL
-    mov ax, 0xFC01
-    out dx, ax
+    # mov dx, 0xF422 # CS4ADH
+    # mov ax, 0x000D
+    # out dx, ax
+    # mov dx, 0xF420 # CS4ADL
+    # mov ax, 0x8503
+    # out dx, ax
+    # mov dx, 0xF426 # CS4MSKH
+    # mov ax, 0x0000
+    # out dx, ax
+    # mov dx, 0xF424 # CS4MSKL
+    # mov ax, 0x1C01
+    # out dx, ax
 
     # Chip Select Unit 5 -> RTC -> (IO) 0070 -> 0071
     # 0000_0000_01 11_000[0]
@@ -339,6 +338,30 @@ start:
     out dx, ax
     mov dx, 0xF42C # CS5MSKL
     mov ax, 0x0401
+    out dx, ax
+
+    # Chip Select Unit 0 -> Flash Memory -> 0010_0000 -> 0017_FFFF
+    # (0000_00) 00_0001_0000_0000_0[000_0000_0000]
+    # mask
+    # (0000_00) 00_0000_0111_1111_1[111_1111_1111]
+
+    # note: due to electrical issues, DOC socket is jumpered to FLASH_CS
+
+    mov dx, 0xF422 # CS4ADH
+    # mov dx, 0xF402 # CS0ADH
+    mov ax, 0x0010
+    out dx, ax
+    mov dx, 0xF420 # CS4ADL
+    # mov dx, 0xF400 # CS0ADL
+    mov ax, 0x0505
+    out dx, ax
+    mov dx, 0xF426 # CS4MSKH
+    # mov dx, 0xF406 # CS0MSKH
+    mov ax, 0x0007
+    out dx, ax
+    mov dx, 0xF424 # CS4MSKL
+    # mov dx, 0xF404 # CS0MSKL
+    mov ax, 0xFC01
     out dx, ax
 
     # ------------------ SWITCH TO PROTECTED MODE -----------------
