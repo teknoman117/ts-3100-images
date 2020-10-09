@@ -6,6 +6,7 @@
 use core::panic::PanicInfo;
 use core::fmt::{self, Write};
 use core::str::FromStr;
+use core::marker::PhantomData;
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
@@ -104,7 +105,7 @@ impl COMBaseAddress for COM2 {
 
 // wraps some core functions of a com port
 struct COM<Port> {
-    phantom: core::marker::PhantomData<Port>
+    phantom: PhantomData<Port>
 }
 
 impl<Port> COM<Port> where Port : COMBaseAddress {
@@ -170,6 +171,23 @@ impl<Port> COM<Port> where Port : COMBaseAddress {
                     Err(_) => None
                 }
             }
+            Err(_) => None
+        }
+    }
+}
+
+// char iterator over COM port ends when carriage return received.
+impl<Port> Iterator for COM<Port> where Port : COMBaseAddress {
+    type Item = char;
+
+    fn next(&mut self) -> Option<char> {
+        match COM::<Port>::readchar() {
+            Ok(c) => {
+                match c {
+                    13 => None,
+                    _ => Some(c as char)
+                }
+            },
             Err(_) => None
         }
     }
