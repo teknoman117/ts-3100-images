@@ -204,9 +204,7 @@ impl<Port> uWrite for COM<Port> where Port : COMBaseAddress {
     type Error = Infallible;
 
     fn write_str(&mut self, s: &str) -> Result<(), Self::Error> {
-        for c in s.chars() {
-            self.writechar(c as u8);
-        }
+        s.as_bytes().iter().for_each(|b| self.writechar(*b));
         Ok(())
     }
 }

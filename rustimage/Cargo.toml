@@ -16,3 +16,5 @@ opt-level = "z"
 [profile.release]
 panic = "abort"
 opt-level = "z"
+debug = true
+lto = true
