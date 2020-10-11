@@ -112,7 +112,7 @@ struct COM<Port> {
 
 // char iterator over COM port ends when carriage return received.
 struct COMPortIterator<'port, Port> {
-    port : &'port mut COM<Port>
+    port : &'port COM<Port>
 }
 
 impl<Port> COM<Port> where Port : COMBaseAddress {
@@ -150,13 +150,13 @@ impl<Port> COM<Port> where Port : COMBaseAddress {
         }
     }
 
-    fn iter(&mut self) -> COMPortIterator::<Port> {
+    fn iter(&self) -> COMPortIterator::<Port> {
         COMPortIterator::<Port> {
             port: self
         }
     }
 
-    fn read_numeric(&mut self, radix: u32) -> Option<u32> {
+    fn read_numeric(&self, radix: u32) -> Option<u32> {
         self.iter().filter(|c| c.is_digit(radix)).fold(None, |state, c| {
             match c.to_digit(radix) {
                 Some(digit) => Some((state.unwrap_or(0u32) * radix) + digit),
