@@ -6,7 +6,6 @@
 use core::convert::Infallible;
 use core::marker::PhantomData;
 use core::panic::PanicInfo;
-use core::str::FromStr;
 
 //use ufmt_write::uWrite;
 use ufmt::{uWrite, uwrite, uwriteln};
@@ -111,6 +110,11 @@ struct COM<Port> {
     phantom: PhantomData<Port>
 }
 
+// char iterator over COM port ends when carriage return received.
+struct COMPortIterator<'port, Port> {
+    port : &'port mut COM<Port>
+}
+
 impl<Port> COM<Port> where Port : COMBaseAddress {
     fn setup(baudrate: u32) -> COM<Port> {
         let divisor = 50000000u32 / (baudrate * 16u32 * 27u32);
@@ -146,49 +150,27 @@ impl<Port> COM<Port> where Port : COMBaseAddress {
         }
     }
 
-    fn readu8(&self) -> Option<u8> {
-        let mut buf : [u8; 3] = [0; 3];
-        let mut length = 0;
-
-        // fetch a string
-        let mut character = Some(0);
-        while let Some(_) = character {
-            character = match self.readchar() {
-                Ok(c) => match c {
-                    13 => None,
-                    _ => {
-                        buf[length] = c;
-                        length = length + 1;
-                        if length < buf.len() {
-                            Some(c)
-                        } else {
-                            None
-                        }
-                    }
-                }
-                Err(_) => None
-            }
+    fn iter(&mut self) -> COMPortIterator::<Port> {
+        COMPortIterator::<Port> {
+            port: self
         }
+    }
 
-        // convert to a u8
-        match core::str::from_utf8(&buf[0..length]) {
-            Ok(s) => {
-                match u8::from_str(s) {
-                    Ok(v) => Some(v),
-                    Err(_) => None
-                }
+    fn read_numeric(&mut self, radix: u32) -> Option<u32> {
+        self.iter().filter(|c| c.is_digit(radix)).fold(None, |state, c| {
+            match c.to_digit(radix) {
+                Some(digit) => Some((state.unwrap_or(0u32) * radix) + digit),
+                None => state
             }
-            Err(_) => None
-        }
+        })
     }
 }
 
-// char iterator over COM port ends when carriage return received.
-impl<Port> Iterator for COM<Port> where Port : COMBaseAddress {
+impl<'port, Port> Iterator for COMPortIterator<'port, Port> where Port : COMBaseAddress {
     type Item = char;
 
     fn next(&mut self) -> Option<char> {
-        match self.readchar() {
+        match self.port.readchar() {
             Ok(c) => {
                 match c {
                     13 => None,
@@ -266,33 +248,33 @@ fn settime_rtc<Port>(uart: &mut COM<Port>) where Port : COMBaseAddress {
 
     // update clock
     uwrite!(uart, "year? ").ok();
-    if let Some(year) = uart.readu8() {
-        write_rtc(0x9, year);
+    if let Some(year) = uart.read_numeric(10) {
+        write_rtc(0x9, year as u8);
     }
 
     uwrite!(uart, "month? ").ok();
-    if let Some(month) = uart.readu8() {
-        write_rtc(0x8, month);
+    if let Some(month) = uart.read_numeric(10) {
+        write_rtc(0x8, month as u8);
     }
 
     uwrite!(uart, "day? ").ok();
-    if let Some(day) = uart.readu8() {
-        write_rtc(0x7, day);
+    if let Some(day) = uart.read_numeric(10) {
+        write_rtc(0x7, day as u8);
     }
 
     uwrite!(uart, "hour? ").ok();
-    if let Some(hour) = uart.readu8() {
-        write_rtc(0x4, hour);
+    if let Some(hour) = uart.read_numeric(10) {
+        write_rtc(0x4, hour as u8);
     }
 
     uwrite!(uart, "minute? ").ok();
-    if let Some(minute) = uart.readu8() {
-        write_rtc(0x2, minute);
+    if let Some(minute) = uart.read_numeric(10) {
+        write_rtc(0x2, minute as u8);
     }
 
     uwrite!(uart, "second? ").ok();
-    if let Some(second) = uart.readu8() {
-        write_rtc(0x0, second);
+    if let Some(second) = uart.read_numeric(10) {
+        write_rtc(0x0, second as u8);
     }
 
     // unlock clock
@@ -313,7 +295,7 @@ pub extern "C" fn main() -> ! {
     uwriteln!(uart, "Rust on i386EX Demo!").ok();
 
     // allow programming the rtc
-    uwriteln!(uart, "set data and time? [y/n]").ok();
+    uwrite!(uart, "set data and time? [y/n]").ok();
     if let Ok(c) = uart.readchar() {
         match c as char {
             'Y' | 'y' => settime_rtc(&mut uart),
