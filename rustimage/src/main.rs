@@ -13,9 +13,13 @@ extern crate num_traits;
 use core::convert::Infallible;
 use core::marker::PhantomData;
 use core::panic::PanicInfo;
-use core::ptr::NonNull;
-use core::str::from_utf8_unchecked;
-use core::str::FromStr;
+//use core::ptr::NonNull;
+use core::str::from_utf8;
+
+// iterator imports for in-place collection functions
+use core::iter::Map;
+//use core::iter::TakeWhile;
+//use core::str::SplitAsciiWhitespace;
 
 use num_traits::pow;
 
@@ -55,13 +59,55 @@ unsafe impl GlobalAlloc for HeapWrapper {
     }
 }*/
 
+trait CollectInPlace<'a, T> {
+    fn collect_with_slice(&mut self, storage: &'a mut [T]) -> &'a [T];
+}
+
+impl<'a, B, I: Iterator, F> CollectInPlace<'a, B> for Map<I, F>
+where
+    F: FnMut(I::Item) -> B,
+{
+    fn collect_with_slice(&mut self, storage: &'a mut [B]) -> &'a [B] {
+        let mut destination = storage.iter_mut();
+        let length = self.fold(0, |length, s| match destination.next() {
+            Some(d) => {
+                *d = s;
+                length + 1
+            }
+            None => length,
+        });
+        &storage[0..length]
+    }
+}
+
+/*impl<'a> CollectInPlace<'a, &str> for SplitAsciiWhitespace<'a>
+{
+    fn collect_with_slice(&mut self, storage: &'a mut [&str]) -> &'a [&str] {
+        let mut destination = storage.iter_mut();
+        let length = self.fold(0, |length, s| match destination.next() {
+            Some(d) => {
+                *d = s;
+                length + 1
+            }
+            None => length,
+        });
+        &storage[0..length]
+    }
+}*/
+
+/*impl<'a, I: Iterator, P> CollectInPlace<'a, I::Item> for TakeWhile<I, P>
+where
+    P: FnMut(&I::Item) -> bool
+{
+    fn collect_with_slice(&mut self, storage: &'a mut [I::Item]) -> &'a [I::Item] {
+        storage
+    }
+}*/
+
 // source is a standard iterator
 // destination is a mutable iterator
 // consumes the iterator (will drain)
-fn collect_all<'a, T, I>(source: T, storage: &'a mut [I]) -> &'a [I]
-where
-    T: Iterator<Item = I>,
-{
+fn collect_all<'a, I: Iterator>(source: I, storage: &'a mut [I::Item]) -> &'a [I::Item] {
     let mut destination = storage.iter_mut();
     let length = source.fold(0, |length, s| match destination.next() {
         Some(d) => {
@@ -128,10 +174,26 @@ fn iowrite16(addr: u16, data: u16) {
 }
 
 // read from a 16 bit I/O port
-fn ioread16(addr : u16) -> u16 {
+fn ioread16(addr: u16) -> u16 {
     unsafe {
         let data;
         asm!("in ax, dx", in ("dx") addr, out("ax") data, options(nomem, nostack));
+        data
+    }
+}
+
+// write to a 32 bit I/O port
+fn iowrite32(addr: u16, data: u32) {
+    unsafe {
+        asm!("out dx, eax", in ("dx") addr, in("eax") data, options(nomem, nostack));
+    }
+}
+
+// read from a 32 bit I/O port
+fn ioread32(addr: u16) -> u32 {
+    unsafe {
+        let data;
+        asm!("in eax, dx", in ("dx") addr, out("eax") data, options(nomem, nostack));
         data
     }
 }
@@ -224,7 +286,7 @@ where
         COMPortIterator::<Port> { port: self }
     }
 
-    fn char_iter(&self) -> COMPortCharIterator<Port> {
+    /*fn char_iter(&self) -> COMPortCharIterator<Port> {
         COMPortCharIterator::<Port> { port: self }
     }
 
@@ -237,13 +299,16 @@ where
                 Some(digit) => Some((state.unwrap_or(0u32) * radix) + digit),
                 None => state,
             })
-    }
+    }*/
 
     fn read_string<'a>(&self, storage: &'a mut [u8]) -> Option<&'a str> {
         let line = self.iter().take_while(|c| *c != 13);
         let data = collect_all(line, storage);
         if data.len() > 0 {
-            unsafe { Some(from_utf8_unchecked(data)) }
+            match from_utf8(data) {
+                Ok(message) => Some(message),
+                Err(_) => None,
+            }
         } else {
             None
         }
@@ -298,7 +363,7 @@ enum Command<'a> {
     },
     DumpMemory {
         base_address: usize,
-        count: usize,
+        size: usize,
     },
     WriteMemory {
         base_address: usize,
@@ -336,11 +401,11 @@ enum Command<'a> {
         second: u8,
     },
     CMOSRead {
-        address: u8,
-        count: usize,
+        address: usize,
+        size: usize,
     },
     CMOSWrite {
-        address: u8,
+        address: usize,
         data: &'a [u8],
     },
     FlashErase {
@@ -349,7 +414,7 @@ enum Command<'a> {
     FlashWrite {
         flash_address: usize,
         data_address: usize,
-        count: usize,
+        size: usize,
     },
 }
 
@@ -374,17 +439,137 @@ where
         uwrite!(self.port, "none:/> ").ok();
 
         // read a string from the uart
-        if let Some(message) = self.port.read_string(&mut self.buffer) {
+        let mut storage = [0u8; 256];
+        if let Some(message) = self.port.read_string(&mut storage) {
             // collect all of the command components
-            let mut slices = [""; 8];
+            let mut slices = [""; 18];
             let t = collect_all(message.split_whitespace(), &mut slices);
 
             match t[0] {
+                "ex" => {
+                    if t.len() >= 2 {
+                        Command::Execute {
+                            address: usize::from_str_radix(t[1], 16).unwrap_or(0),
+                        }
+                    } else {
+                        Command::None
+                    }
+                }
                 "dm" => {
                     if t.len() >= 3 {
                         Command::DumpMemory {
                             base_address: usize::from_str_radix(t[1], 16).unwrap_or(0),
-                            count: usize::from_str_radix(t[2], 16).unwrap_or(0),
+                            size: usize::from_str_radix(t[2], 16).unwrap_or(0),
+                        }
+                    } else {
+                        Command::None
+                    }
+                }
+                "wm" => {
+                    if t.len() >= 2 {
+                        let data = &t[2..t.len()]
+                            .iter()
+                            .map(|s| u8::from_str_radix(s, 16).unwrap_or(0u8))
+                            .collect_with_slice(&mut self.buffer);
+                        Command::WriteMemory {
+                            base_address: usize::from_str_radix(t[1], 16).unwrap_or(0),
+                            data: data,
+                        }
+                    } else {
+                        Command::None
+                    }
+                }
+                "iw" => {
+                    if t.len() >= 4 {
+                        let address = u16::from_str_radix(t[2], 16).unwrap_or(0);
+                        match t[1] {
+                            "b" => Command::IOWrite8 {
+                                address: address,
+                                data: u8::from_str_radix(t[3], 16).unwrap_or(0),
+                            },
+                            "w" => Command::IOWrite16 {
+                                address: address,
+                                data: u16::from_str_radix(t[3], 16).unwrap_or(0),
+                            },
+                            "l" => Command::IOWrite32 {
+                                address: address,
+                                data: u32::from_str_radix(t[3], 16).unwrap_or(0),
+                            },
+                            _ => Command::None,
+                        }
+                    } else {
+                        Command::None
+                    }
+                }
+                "ir" => {
+                    if t.len() >= 3 {
+                        let address = u16::from_str_radix(t[2], 16).unwrap_or(0);
+                        match t[1] {
+                            "b" => Command::IORead8 { address: address },
+                            "w" => Command::IORead16 { address: address },
+                            "l" => Command::IORead32 { address: address },
+                            _ => Command::None,
+                        }
+                    } else {
+                        Command::None
+                    }
+                }
+                "tg" => Command::RTCRead,
+                "ts" => {
+                    if t.len() >= 7 {
+                        let year = u16::from_str_radix(t[1], 10).unwrap_or(0);
+                        Command::RTCWrite {
+                            century: (year / 100) as u8,
+                            year: (year % 100) as u8,
+                            month: u8::from_str_radix(t[2], 10).unwrap_or(0),
+                            day: u8::from_str_radix(t[3], 10).unwrap_or(0),
+                            hour: u8::from_str_radix(t[4], 10).unwrap_or(0),
+                            minute: u8::from_str_radix(t[5], 10).unwrap_or(0),
+                            second: u8::from_str_radix(t[6], 10).unwrap_or(0),
+                        }
+                    } else {
+                        Command::None
+                    }
+                }
+                "cr" => {
+                    if t.len() >= 3 {
+                        Command::CMOSRead {
+                            address: usize::from_str_radix(t[1], 16).unwrap_or(0),
+                            size: usize::from_str_radix(t[2], 16).unwrap_or(0),
+                        }
+                    } else {
+                        Command::None
+                    }
+                }
+                "cw" => {
+                    if t.len() >= 2 {
+                        let data = &t[2..t.len()]
+                            .iter()
+                            .map(|s| u8::from_str_radix(s, 16).unwrap_or(0u8))
+                            .collect_with_slice(&mut self.buffer);
+                        Command::CMOSWrite {
+                            address: usize::from_str_radix(t[1], 16).unwrap_or(0),
+                            data: data,
+                        }
+                    } else {
+                        Command::None
+                    }
+                }
+                "fe" => {
+                    if t.len() >= 2 {
+                        Command::FlashErase {
+                            sector: u8::from_str_radix(t[1], 16).unwrap_or(0),
+                        }
+                    } else {
+                        Command::None
+                    }
+                }
+                "fw" => {
+                    if t.len() >= 4 {
+                        Command::FlashWrite {
+                            flash_address: usize::from_str_radix(t[1], 16).unwrap_or(0),
+                            data_address: usize::from_str_radix(t[2], 16).unwrap_or(0),
+                            size: usize::from_str_radix(t[3], 16).unwrap_or(0),
                         }
                     } else {
                         Command::None
@@ -430,80 +615,6 @@ fn map_rtc() {
     setbits_rtc(0xB, 0b0000_0110);
 }
 
-fn print_rtc<Port>(uart: &mut COM<Port>)
-where
-    Port: COMBaseAddress,
-{
-    // battery status string
-    let battery_msg = match read_rtc(0xD) & 0x80 {
-        0 => "DEAD",
-        _ => "GOOD",
-    };
-
-    // lock the clock so it doesn't update
-    setbits_rtc(0xB, 0b1000_0000);
-
-    uwriteln!(
-        uart,
-        "RTC (battery: {}): {}-{}-{} {}:{}:{}",
-        battery_msg,
-        read_rtc(0x9),
-        read_rtc(0x8),
-        read_rtc(0x7),
-        read_rtc(0x4),
-        read_rtc(0x2),
-        read_rtc(0x0)
-    )
-    .ok();
-
-    // unlock the clock
-    clearbits_rtc(0xB, 0b1000_0000);
-}
-
-fn settime_rtc<Port>(uart: &mut COM<Port>)
-where
-    Port: COMBaseAddress,
-{
-    // lock the clock so it doesn't update
-    clearbits_rtc(0xA, 0b0111_0000);
-    setbits_rtc(0xB, 0b1000_0000);
-
-    // update clock
-    uwrite!(uart, "year? ").ok();
-    if let Some(year) = uart.read_numeric(10) {
-        write_rtc(0x9, year as u8);
-    }
-
-    uwrite!(uart, "month? ").ok();
-    if let Some(month) = uart.read_numeric(10) {
-        write_rtc(0x8, month as u8);
-    }
-
-    uwrite!(uart, "day? ").ok();
-    if let Some(day) = uart.read_numeric(10) {
-        write_rtc(0x7, day as u8);
-    }
-
-    uwrite!(uart, "hour? ").ok();
-    if let Some(hour) = uart.read_numeric(10) {
-        write_rtc(0x4, hour as u8);
-    }
-
-    uwrite!(uart, "minute? ").ok();
-    if let Some(minute) = uart.read_numeric(10) {
-        write_rtc(0x2, minute as u8);
-    }
-
-    uwrite!(uart, "second? ").ok();
-    if let Some(second) = uart.read_numeric(10) {
-        write_rtc(0x0, second as u8);
-    }
-
-    // unlock clock
-    clearbits_rtc(0xB, 0b1000_0000);
-    setbits_rtc(0xA, 0b0010_0000);
-}
-
 fn display_hex<Port>(port: &COM<Port>, value: usize, digits: usize)
 where
     Port: COMBaseAddress,
@@ -515,7 +626,7 @@ where
     });
 }
 
-fn display_slice_as_hex<Port>(port: &mut COM<Port>, data: &[u8])
+fn display_slice_as_hex<Port>(port: &mut COM<Port>, data: &[u8], offset_addressing: bool)
 where
     Port: COMBaseAddress,
 {
@@ -525,7 +636,11 @@ where
 
         // display the base address of the row
         // display_hex could be solved by implementing it in ufmt
-        display_hex(&port, row.as_ptr() as usize, 8);
+        let display_address = match offset_addressing {
+            true => offset,
+            false => row.as_ptr() as usize
+        };
+        display_hex(&port, display_address, 8);
         uwrite!(port, ":  ").ok();
 
         // display each hex character on the row
@@ -543,6 +658,7 @@ where
         row.iter()
             .map(|b| {
                 let c = *b as char;
+                //if (c.is_ascii_alphanumeric() || c.is_ascii_whitespace() || c.is_ascii_punctuation()) {
                 if !c.is_ascii_control() {
                     c
                 } else {
@@ -583,14 +699,140 @@ pub extern "C" fn main() -> ! {
     let mut parser = CommandParser::new(uart);
     loop {
         match parser.next_command() {
-            Command::DumpMemory {
-                base_address,
-                count,
-            } => {
-                let slice =
-                    unsafe { core::slice::from_raw_parts(base_address as *const u8, count) };
-                display_slice_as_hex(&mut parser.port, slice);
+            Command::Execute { address } => {
+                uwriteln!(parser.port, "Execute is not implemented yet").ok();
             }
+
+            Command::DumpMemory { base_address, size } => {
+                let slice = unsafe { core::slice::from_raw_parts(base_address as *const u8, size) };
+                display_slice_as_hex(&mut parser.port, slice, false);
+            }
+
+            Command::WriteMemory { base_address, data } => {
+                let slice =
+                    unsafe { core::slice::from_raw_parts_mut(base_address as *mut u8, data.len()) };
+                slice.clone_from_slice(&data);
+            }
+
+            Command::IOWrite8 { address, data } => {
+                iowrite8(address, data);
+            }
+
+            Command::IOWrite16 { address, data } => {
+                iowrite16(address, data);
+            }
+
+            Command::IOWrite32 { address, data } => {
+                iowrite32(address, data);
+            }
+
+            Command::IORead8 { address } => {
+                uwrite!(parser.port, "inb (").ok();
+                display_hex(&parser.port, address as usize, 4);
+                uwrite!(parser.port, ") = ").ok();
+                display_hex(&parser.port, ioread8(address) as usize, 2);
+                uwriteln!(parser.port, "").ok();
+            }
+
+            Command::IORead16 { address } => {
+                uwrite!(parser.port, "inw (").ok();
+                display_hex(&parser.port, address as usize, 4);
+                uwrite!(parser.port, ") = ").ok();
+                display_hex(&parser.port, ioread16(address) as usize, 2);
+                uwriteln!(parser.port, "").ok();
+            }
+
+            Command::IORead32 { address } => {
+                uwrite!(parser.port, "inl (").ok();
+                display_hex(&parser.port, address as usize, 4);
+                uwrite!(parser.port, ") = ").ok();
+                display_hex(&parser.port, ioread32(address) as usize, 2);
+                uwriteln!(parser.port, "").ok();
+            }
+
+            Command::RTCRead => {
+                // battery status string
+                let battery_msg = match read_rtc(0xD) & 0x80 {
+                    0 => "DEAD",
+                    _ => "GOOD",
+                };
+
+                // lock the clock so it doesn't update
+                setbits_rtc(0xB, 0b1000_0000);
+
+                uwriteln!(
+                    parser.port,
+                    "Date: {}{}-{}-{} {}:{}:{} (CMOS Battery {})",
+                    "", // TODO: century
+                    read_rtc(0x9),
+                    read_rtc(0x8),
+                    read_rtc(0x7),
+                    read_rtc(0x4),
+                    read_rtc(0x2),
+                    read_rtc(0x0),
+                    battery_msg
+                )
+                .ok();
+
+                // unlock the clock
+                clearbits_rtc(0xB, 0b1000_0000);
+            }
+
+            Command::RTCWrite {
+                century,
+                year,
+                month,
+                day,
+                hour,
+                minute,
+                second,
+            } => {
+                // lock the clock so it doesn't update
+                clearbits_rtc(0xA, 0b0111_0000);
+                setbits_rtc(0xB, 0b1000_0000);
+
+                // update clock
+                // TODO: century
+                write_rtc(0x9, year);
+                write_rtc(0x8, month);
+                write_rtc(0x7, day);
+                write_rtc(0x4, hour);
+                write_rtc(0x2, minute);
+                write_rtc(0x0, second);
+
+                // unlock clock
+                clearbits_rtc(0xB, 0b1000_0000);
+                setbits_rtc(0xA, 0b0010_0000);
+            }
+
+            Command::CMOSRead { address, size } => {
+                let last_address = core::cmp::min(address + size, 114);
+                let mut data = [0u8; 114];
+                (address..last_address).for_each(|x| {
+                    data[x] = read_rtc((x as u8) + 14);
+                });
+                display_slice_as_hex(&mut parser.port, &data[address..last_address], false);
+            }
+
+            Command::CMOSWrite { address, data } => {
+                let last_address = core::cmp::min(address + data.len(), 114);
+                (address..last_address).for_each(|x| {
+                    write_rtc((x as u8) + 14, data[x]);
+                });
+            }
+
+            Command::FlashErase { sector } => {
+                uwriteln!(parser.port, "Flash Erase is not implemented yet").unwrap();
+            }
+
+            Command::FlashWrite {
+                flash_address,
+                data_address,
+                size,
+            } => {
+                uwriteln!(parser.port, "Flash Write is not implemented yet").unwrap();
+            }
+
             _ => uwriteln!(parser.port, "Unknown command").unwrap(),
         }
     }
