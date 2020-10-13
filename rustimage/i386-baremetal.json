@@ -10,7 +10,6 @@
     "cpu": "i386",
     "os": "none",
     "features": "-mmx,-sse,+soft-float",
-    "atomic-cas": false,
     "disable-redzone": true,
     "panic-strategy": "abort",
     "executables": true,
