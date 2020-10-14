@@ -111,6 +111,12 @@ _protected:
     movl $__rodata_size_dwords, %ecx
     rep movsl %ds:(%esi), %es:(%edi)
 
+    # copy .text segment (to RORAM)
+    movl $__sitext, %esi
+    movl $__stext, %edi
+    movl $__text_size_dwords, %ecx
+    rep movsl %ds:(%esi), %es:(%edi)
+
     # relocate rom to normal region
     # will disable access to RORAM region
     # Change UCS to 0340_0000 -> 0340_1FFF

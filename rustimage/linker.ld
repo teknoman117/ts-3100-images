@@ -19,23 +19,33 @@ SECTIONS
 {
     PROVIDE(_stack_start = ORIGIN(RAM) + LENGTH(RAM));
 
-    .gdt :
+    .gdt : ALIGN(8)
     {
+        . = ALIGN(8);
         (*.gdt);
         . = ALIGN(8);
     } > ROM
+    . = ALIGN(8);
 
-    .init32 :
+    .init32 : ALIGN(4)
     {
+        . = ALIGN(4);
         (*.init32 .init32.*);
-        . = ALIGN(8);
+        . = ALIGN(4);
     } > ROM
+    . = ALIGN(4);
 
-    .text :
+    .text : ALIGN(4)
     {
+        . = ALIGN(4);
+        __stext = .;
         *(.text .text.*);
-        . = ALIGN(8);
-    } > ROM
+        . = ALIGN(4);
+    } > RORAM AT>ROM
+    . = ALIGN(4);
+    __etext = .;
+    __text_size_dwords = (SIZEOF(.text) / 4);
+    __sitext = LOADADDR(.text);
 
     .rodata : ALIGN(4)
     {

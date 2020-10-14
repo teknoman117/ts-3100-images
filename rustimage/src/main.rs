@@ -362,11 +362,11 @@ enum Command<'a> {
         address: usize,
     },
     DumpMemory {
-        base_address: usize,
+        address: usize,
         size: usize,
     },
     WriteMemory {
-        base_address: usize,
+        address: usize,
         data: &'a [u8],
     },
     IOWrite8 {
@@ -458,7 +458,7 @@ where
                 "dm" => {
                     if t.len() >= 3 {
                         Command::DumpMemory {
-                            base_address: usize::from_str_radix(t[1], 16).unwrap_or(0),
+                            address: usize::from_str_radix(t[1], 16).unwrap_or(0),
                             size: usize::from_str_radix(t[2], 16).unwrap_or(0),
                         }
                     } else {
@@ -472,7 +472,7 @@ where
                             .map(|s| u8::from_str_radix(s, 16).unwrap_or(0u8))
                             .collect_with_slice(&mut self.buffer);
                         Command::WriteMemory {
-                            base_address: usize::from_str_radix(t[1], 16).unwrap_or(0),
+                            address: usize::from_str_radix(t[1], 16).unwrap_or(0),
                             data: data,
                         }
                     } else {
@@ -615,38 +615,30 @@ fn map_rtc() {
     setbits_rtc(0xB, 0b0000_0110);
 }
 
-fn display_hex<Port>(port: &COM<Port>, value: usize, digits: usize)
-where
-    Port: COMBaseAddress,
-{
-    (0usize..digits).rev().fold(value, |acc, digit| {
+fn display_hex<T: uWrite>(port: &mut T, value: usize, digits: usize) {
+    (0usize..digits).rev().fold(value, |rem, digit| {
         let place = pow(16usize, digit);
-        port.writechar(char::from_digit((acc / place) as u32, 16).unwrap_or(' '));
-        value % place
+        port.write_char(char::from_digit((rem / place) as u32, 16).unwrap_or(' '))
+            .ok();
+        rem % place
     });
 }
 
-fn display_slice_as_hex<Port>(port: &mut COM<Port>, data: &[u8], offset_addressing: bool)
-where
-    Port: COMBaseAddress,
-{
+fn display_slice_as_hex<T: uWrite>(port: &mut T, data: &[u8], address: usize) {
+    // display each row of the hex dump
     (0..data.len()).step_by(16).for_each(|offset| {
         let size = core::cmp::min(16, data.len() - offset);
         let row = &data[offset..(offset + size)];
 
         // display the base address of the row
         // display_hex could be solved by implementing it in ufmt
-        let display_address = match offset_addressing {
-            true => offset,
-            false => row.as_ptr() as usize
-        };
-        display_hex(&port, display_address, 8);
+        display_hex(port, address + offset, 8);
         uwrite!(port, ":  ").ok();
 
         // display each hex character on the row
         (0..16).for_each(|i| {
             if i < row.len() {
-                display_hex(&port, row[i] as usize, 2);
+                display_hex(port, row[i] as usize, 2);
                 uwrite!(port, " ").ok();
             } else {
                 uwrite!(port, "   ").ok();
@@ -654,21 +646,22 @@ where
         });
 
         // display the ascii conversion
-        uwrite!(port, " ").ok();
+        let mut ascii = [0u8; 16];
         row.iter()
             .map(|b| {
                 let c = *b as char;
-                //if (c.is_ascii_alphanumeric() || c.is_ascii_whitespace() || c.is_ascii_punctuation()) {
-                if !c.is_ascii_control() {
-                    c
+                if !c.is_ascii_control()
+                    && (c.is_ascii_alphanumeric()
+                        || c.is_ascii_whitespace()
+                        || c.is_ascii_punctuation())
+                {
+                    *b
                 } else {
-                    '.'
+                    '.' as u8
                 }
             })
-            .for_each(|c| port.writechar(c));
-
-        // newline
-        uwriteln!(port, "").ok();
+            .collect_with_slice(&mut ascii);
+        uwriteln!(port, " {}", from_utf8(&ascii).unwrap_or("")).ok();
     });
 }
 
@@ -703,14 +696,14 @@ pub extern "C" fn main() -> ! {
                 uwriteln!(parser.port, "Execute is not implemented yet").ok();
             }
 
-            Command::DumpMemory { base_address, size } => {
-                let slice = unsafe { core::slice::from_raw_parts(base_address as *const u8, size) };
-                display_slice_as_hex(&mut parser.port, slice, false);
+            Command::DumpMemory { address, size } => {
+                let slice = unsafe { core::slice::from_raw_parts(address as *const u8, size) };
+                display_slice_as_hex(&mut parser.port, slice, address);
             }
 
-            Command::WriteMemory { base_address, data } => {
+            Command::WriteMemory { address, data } => {
                 let slice =
-                    unsafe { core::slice::from_raw_parts_mut(base_address as *mut u8, data.len()) };
+                    unsafe { core::slice::from_raw_parts_mut(address as *mut u8, data.len()) };
                 slice.clone_from_slice(&data);
             }
 
@@ -728,25 +721,25 @@ pub extern "C" fn main() -> ! {
 
             Command::IORead8 { address } => {
                 uwrite!(parser.port, "inb (").ok();
-                display_hex(&parser.port, address as usize, 4);
+                display_hex(&mut parser.port, address as usize, 4);
                 uwrite!(parser.port, ") = ").ok();
-                display_hex(&parser.port, ioread8(address) as usize, 2);
+                display_hex(&mut parser.port, ioread8(address) as usize, 2);
                 uwriteln!(parser.port, "").ok();
             }
 
             Command::IORead16 { address } => {
                 uwrite!(parser.port, "inw (").ok();
-                display_hex(&parser.port, address as usize, 4);
+                display_hex(&mut parser.port, address as usize, 4);
                 uwrite!(parser.port, ") = ").ok();
-                display_hex(&parser.port, ioread16(address) as usize, 2);
+                display_hex(&mut parser.port, ioread16(address) as usize, 2);
                 uwriteln!(parser.port, "").ok();
             }
 
             Command::IORead32 { address } => {
                 uwrite!(parser.port, "inl (").ok();
-                display_hex(&parser.port, address as usize, 4);
+                display_hex(&mut parser.port, address as usize, 4);
                 uwrite!(parser.port, ") = ").ok();
-                display_hex(&parser.port, ioread32(address) as usize, 2);
+                display_hex(&mut parser.port, ioread32(address) as usize, 2);
                 uwriteln!(parser.port, "").ok();
             }
 
@@ -811,7 +804,7 @@ pub extern "C" fn main() -> ! {
                 (address..last_address).for_each(|x| {
                     data[x] = read_rtc((x as u8) + 14);
                 });
-                display_slice_as_hex(&mut parser.port, &data[address..last_address], false);
+                display_slice_as_hex(&mut parser.port, &data[address..last_address], address);
             }
 
             Command::CMOSWrite { address, data } => {
