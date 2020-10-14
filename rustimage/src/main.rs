@@ -14,7 +14,7 @@ use core::convert::Infallible;
 use core::marker::PhantomData;
 use core::panic::PanicInfo;
 //use core::ptr::NonNull;
-use core::str::from_utf8;
+use core::str::from_utf8_unchecked;
 
 // iterator imports for in-place collection functions
 use core::iter::Map;
@@ -305,10 +305,7 @@ where
         let line = self.iter().take_while(|c| *c != 13);
         let data = collect_all(line, storage);
         if data.len() > 0 {
-            match from_utf8(data) {
-                Ok(message) => Some(message),
-                Err(_) => None,
-            }
+            unsafe { Some(from_utf8_unchecked(data)) }
         } else {
             None
         }
@@ -442,58 +439,60 @@ where
         let mut storage = [0u8; 256];
         if let Some(message) = self.port.read_string(&mut storage) {
             // collect all of the command components
-            let mut slices = [""; 18];
-            let t = collect_all(message.split_whitespace(), &mut slices);
+            let mut tokens = [""; 18];
+            let mut numbers = [0usize; 18];
+            let t = collect_all(message.split_ascii_whitespace(), &mut tokens);
+            let n = &t[1..t.len()]
+                .iter()
+                .map(|s| usize::from_str_radix(s, 16).unwrap_or(0usize))
+                .collect_with_slice(&mut numbers);
+            let d = n
+                .iter()
+                .map(|s| *s as u8)
+                .collect_with_slice(&mut self.buffer);
 
             match t[0] {
                 "ex" => {
-                    if t.len() >= 2 {
-                        Command::Execute {
-                            address: usize::from_str_radix(t[1], 16).unwrap_or(0),
-                        }
+                    if n.len() > 0 {
+                        Command::Execute { address: n[0] }
                     } else {
                         Command::None
                     }
                 }
                 "dm" => {
-                    if t.len() >= 3 {
+                    if n.len() > 1 {
                         Command::DumpMemory {
-                            address: usize::from_str_radix(t[1], 16).unwrap_or(0),
-                            size: usize::from_str_radix(t[2], 16).unwrap_or(0),
+                            address: n[0],
+                            size: n[1],
                         }
                     } else {
                         Command::None
                     }
                 }
                 "wm" => {
-                    if t.len() >= 2 {
-                        let data = &t[2..t.len()]
-                            .iter()
-                            .map(|s| u8::from_str_radix(s, 16).unwrap_or(0u8))
-                            .collect_with_slice(&mut self.buffer);
+                    if n.len() > 1 {
                         Command::WriteMemory {
-                            address: usize::from_str_radix(t[1], 16).unwrap_or(0),
-                            data: data,
+                            address: n[0],
+                            data: &d[1..d.len()],
                         }
                     } else {
                         Command::None
                     }
                 }
-                "iw" => {
-                    if t.len() >= 4 {
-                        let address = u16::from_str_radix(t[2], 16).unwrap_or(0);
+                "out" => {
+                    if n.len() > 2 {
                         match t[1] {
                             "b" => Command::IOWrite8 {
-                                address: address,
-                                data: u8::from_str_radix(t[3], 16).unwrap_or(0),
+                                address: n[1] as u16,
+                                data: n[2] as u8,
                             },
                             "w" => Command::IOWrite16 {
-                                address: address,
-                                data: u16::from_str_radix(t[3], 16).unwrap_or(0),
+                                address: n[1] as u16,
+                                data: n[2] as u16,
                             },
                             "l" => Command::IOWrite32 {
-                                address: address,
-                                data: u32::from_str_radix(t[3], 16).unwrap_or(0),
+                                address: n[1] as u16,
+                                data: n[2] as u32,
                             },
                             _ => Command::None,
                         }
@@ -501,13 +500,18 @@ where
                         Command::None
                     }
                 }
-                "ir" => {
-                    if t.len() >= 3 {
-                        let address = u16::from_str_radix(t[2], 16).unwrap_or(0);
+                "in" => {
+                    if n.len() > 1 {
                         match t[1] {
-                            "b" => Command::IORead8 { address: address },
-                            "w" => Command::IORead16 { address: address },
-                            "l" => Command::IORead32 { address: address },
+                            "b" => Command::IORead8 {
+                                address: n[1] as u16,
+                            },
+                            "w" => Command::IORead16 {
+                                address: n[1] as u16,
+                            },
+                            "l" => Command::IORead32 {
+                                address: n[1] as u16,
+                            },
                             _ => Command::None,
                         }
                     } else {
@@ -516,60 +520,54 @@ where
                 }
                 "tg" => Command::RTCRead,
                 "ts" => {
-                    if t.len() >= 7 {
-                        let year = u16::from_str_radix(t[1], 10).unwrap_or(0);
+                    if n.len() > 5 {
+                        let year = n[0];
                         Command::RTCWrite {
                             century: (year / 100) as u8,
                             year: (year % 100) as u8,
-                            month: u8::from_str_radix(t[2], 10).unwrap_or(0),
-                            day: u8::from_str_radix(t[3], 10).unwrap_or(0),
-                            hour: u8::from_str_radix(t[4], 10).unwrap_or(0),
-                            minute: u8::from_str_radix(t[5], 10).unwrap_or(0),
-                            second: u8::from_str_radix(t[6], 10).unwrap_or(0),
+                            month: n[1] as u8,
+                            day: n[2] as u8,
+                            hour: n[3] as u8,
+                            minute: n[4] as u8,
+                            second: n[5] as u8,
                         }
                     } else {
                         Command::None
                     }
                 }
                 "cr" => {
-                    if t.len() >= 3 {
+                    if n.len() > 1 {
                         Command::CMOSRead {
-                            address: usize::from_str_radix(t[1], 16).unwrap_or(0),
-                            size: usize::from_str_radix(t[2], 16).unwrap_or(0),
+                            address: n[0],
+                            size: n[1],
                         }
                     } else {
                         Command::None
                     }
                 }
                 "cw" => {
-                    if t.len() >= 2 {
-                        let data = &t[2..t.len()]
-                            .iter()
-                            .map(|s| u8::from_str_radix(s, 16).unwrap_or(0u8))
-                            .collect_with_slice(&mut self.buffer);
+                    if n.len() > 1 {
                         Command::CMOSWrite {
-                            address: usize::from_str_radix(t[1], 16).unwrap_or(0),
-                            data: data,
+                            address: n[0],
+                            data: &d[1..d.len()],
                         }
                     } else {
                         Command::None
                     }
                 }
                 "fe" => {
-                    if t.len() >= 2 {
-                        Command::FlashErase {
-                            sector: u8::from_str_radix(t[1], 16).unwrap_or(0),
-                        }
+                    if n.len() > 0 {
+                        Command::FlashErase { sector: n[0] as u8 }
                     } else {
                         Command::None
                     }
                 }
                 "fw" => {
-                    if t.len() >= 4 {
+                    if n.len() > 2 {
                         Command::FlashWrite {
-                            flash_address: usize::from_str_radix(t[1], 16).unwrap_or(0),
-                            data_address: usize::from_str_radix(t[2], 16).unwrap_or(0),
-                            size: usize::from_str_radix(t[3], 16).unwrap_or(0),
+                            flash_address: n[0],
+                            data_address: n[1],
+                            size: n[2],
                         }
                     } else {
                         Command::None
@@ -661,7 +659,9 @@ fn display_slice_as_hex<T: uWrite>(port: &mut T, data: &[u8], address: usize) {
                 }
             })
             .collect_with_slice(&mut ascii);
-        uwriteln!(port, " {}", from_utf8(&ascii).unwrap_or("")).ok();
+        unsafe {
+            uwriteln!(port, " {}", from_utf8_unchecked(&ascii)).ok();
+        }
     });
 }
 
