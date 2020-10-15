@@ -99,42 +99,13 @@ SECTIONS
     } > ROM
 
     /* real mode initialization */
-    .init16 REAL_BASE : AT(ORIGIN(ROM) + REAL_BASE) { *(.init16); } >ROM
-    .reset RESET_BASE : AT(ORIGIN(ROM) + RESET_BASE) { *(.reset); } >ROM
-}
-
-/*SECTIONS
-{
-    . = 0x0;
-    __ram_start = .;
-    __edata_start = .;
-    . += SIZEOF(.data);
-    __edata_end = .;
-    . = ALIGN(16);
-    __ebss_start = .;
-    . += SIZEOF(.bss);
-    __ebss_end = .;
-    . = 0x70000;
-    __ram_end = .;
-
-    . = ROM_BASE;
-    .init32 :
+    .init16 REAL_BASE : AT(ORIGIN(ROM) + REAL_BASE)
     {
-        KEEP(*(.gdt));
-        . = ALIGN(8);
-        *(.init32);
-    }
+        *(.init16);
+    } > ROM
 
-    . = ALIGN(8);
-    .text : { *(.text .text.*); }
-    . = ALIGN(8);
-    .rodata : { *(.rodata .rodata.*); }
-    . = ALIGN(8);
-    __sdata_start = .;
-    .data 0 : AT(0x03401000) { *(.data .data.*); }
-    __sdata_end = .;
-
-    .init16 REAL_BASE : AT(ROM_BASE + REAL_BASE) { *(.init16); }
-
-    .reset RESET_BASE : AT(ROM_BASE + RESET_BASE) { *(.reset); }
-}*/
+    .reset RESET_BASE : AT(ORIGIN(ROM) + RESET_BASE)
+    {
+        *(.reset);
+    } > ROM
+}
