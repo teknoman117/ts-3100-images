@@ -71,13 +71,32 @@ _start:
 
     # setup serial pins
     movw $0xF826, %dx
-    movb $0x3f, %al
+    inb (%dx), %al
+    andb $0x80, %al
+    orb $0x3F, %al
     outb %al, (%dx)
 
     # setup serial clocking
     movw $0xF836, %dx
     movb $0x40, %al
     outb %al, (%dx)
+
+    # setup refresh unit
+    # looks like a read in (0x90000 -> 0x93FFF) in 8 bit mode, as BHE and BLE aren't available
+    # refresh pin is not connected to the PLD
+    movw $0xF4A0, %dx
+    movw $0x0024, %ax
+    outw %ax, (%dx)
+
+    # how many 25 MHz cycles pass before issuing refresh
+    movw $0xF4A2, %dx
+    movw $0x030C, %ax
+    outw %ax, (%dx)
+
+    # start refresh unit
+    movw $0xF4A4, %dx
+    movw $0x8000, %ax
+    outw %ax, (%dx)
 
     # --- ----------------------------------------------
 

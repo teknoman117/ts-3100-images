@@ -731,7 +731,7 @@ pub extern "C" fn main() -> ! {
                 uwrite!(parser.port, "inw (").ok();
                 display_hex(&mut parser.port, address as usize, 4);
                 uwrite!(parser.port, ") = ").ok();
-                display_hex(&mut parser.port, ioread16(address) as usize, 2);
+                display_hex(&mut parser.port, ioread16(address) as usize, 4);
                 uwriteln!(parser.port, "").ok();
             }
 
@@ -739,7 +739,7 @@ pub extern "C" fn main() -> ! {
                 uwrite!(parser.port, "inl (").ok();
                 display_hex(&mut parser.port, address as usize, 4);
                 uwrite!(parser.port, ") = ").ok();
-                display_hex(&mut parser.port, ioread32(address) as usize, 2);
+                display_hex(&mut parser.port, ioread32(address) as usize, 8);
                 uwriteln!(parser.port, "").ok();
             }
 

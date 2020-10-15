@@ -364,6 +364,24 @@ start:
     mov ax, 0xFC01
     out dx, ax
 
+    # ------------------ SETUP REFRESH UNIT ------------------
+
+    # looks like a read in (0x90000 -> 0x93FFF) in 8 bit mode, as BHE and BLE aren't available
+    # refresh pin is not connected to the PLD
+    mov dx, 0xF4A0
+    mov ax, 0x0024
+    out dx, ax
+
+    # how many 25 MHz cycles pass before issuing refresh
+    mov dx, 0xF4A2
+    mov ax, 0x030C
+    out dx, ax
+
+    # start refresh unit
+    mov dx, 0xF4A4
+    mov ax, 0x8000
+    out dx, ax
+
     # ------------------ SWITCH TO PROTECTED MODE -----------------
 
     lgdt [gdtinfo]
