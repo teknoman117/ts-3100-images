@@ -5,7 +5,6 @@
 #![feature(assoc_char_funcs)]
 
 //extern crate alloc;
-extern crate num_traits;
 
 //use alloc::alloc::{GlobalAlloc, Layout};
 //use alloc::{boxed::Box, rc::Rc, vec, vec::Vec};
@@ -21,16 +20,14 @@ use core::iter::Map;
 //use core::iter::TakeWhile;
 //use core::str::SplitAsciiWhitespace;
 
-use num_traits::pow;
-
 //use linked_list_allocator::Heap;
 
 use ufmt::{uWrite, uwrite, uwriteln};
 
 // an allocator
-struct HeapWrapper {}
+/*struct HeapWrapper {}
 
-/*#[global_allocator]
+#[global_allocator]
 static mut ALLOCATOR: HeapWrapper = HeapWrapper {};
 static mut HEAP: Heap = Heap::empty();
 */
@@ -415,6 +412,14 @@ enum Command<'a> {
     },
 }
 
+fn check_length<'a, T>(slice: &'a [T], length: usize) -> Option<&'a [T]> {
+    if slice.len() < length {
+        None
+    } else {
+        Some(slice)
+    }
+}
+
 struct CommandParser<Port> {
     buffer: [u8; 256],
     port: COM<Port>,
@@ -431,153 +436,134 @@ where
         }
     }
 
-    fn next_command(&mut self) -> Command {
+    fn next_command(&mut self) -> Option<Command> {
         // place the prompt
         uwrite!(self.port, "none:/> ").ok();
 
         // read a string from the uart
         let mut storage = [0u8; 256];
-        if let Some(message) = self.port.read_string(&mut storage) {
-            // collect all of the command components
-            let mut tokens = [""; 18];
-            let mut numbers = [0usize; 18];
-            let t = collect_all(message.split_ascii_whitespace(), &mut tokens);
-            let n = &t[1..t.len()]
-                .iter()
-                .map(|s| usize::from_str_radix(s, 16).unwrap_or(0usize))
-                .collect_with_slice(&mut numbers);
-            let d = n
-                .iter()
-                .map(|s| *s as u8)
-                .collect_with_slice(&mut self.buffer);
+        let message = self.port.read_string(&mut storage)?;
 
-            match t[0] {
-                "ex" => {
-                    if n.len() > 0 {
-                        Command::Execute { address: n[0] }
-                    } else {
-                        Command::None
-                    }
-                }
-                "dm" => {
-                    if n.len() > 1 {
-                        Command::DumpMemory {
-                            address: n[0],
-                            size: n[1],
-                        }
-                    } else {
-                        Command::None
-                    }
-                }
-                "wm" => {
-                    if n.len() > 1 {
-                        Command::WriteMemory {
-                            address: n[0],
-                            data: &d[1..d.len()],
-                        }
-                    } else {
-                        Command::None
-                    }
-                }
-                "out" => {
-                    if n.len() > 2 {
-                        match t[1] {
-                            "b" => Command::IOWrite8 {
-                                address: n[1] as u16,
-                                data: n[2] as u8,
-                            },
-                            "w" => Command::IOWrite16 {
-                                address: n[1] as u16,
-                                data: n[2] as u16,
-                            },
-                            "l" => Command::IOWrite32 {
-                                address: n[1] as u16,
-                                data: n[2] as u32,
-                            },
-                            _ => Command::None,
-                        }
-                    } else {
-                        Command::None
-                    }
-                }
-                "in" => {
-                    if n.len() > 1 {
-                        match t[1] {
-                            "b" => Command::IORead8 {
-                                address: n[1] as u16,
-                            },
-                            "w" => Command::IORead16 {
-                                address: n[1] as u16,
-                            },
-                            "l" => Command::IORead32 {
-                                address: n[1] as u16,
-                            },
-                            _ => Command::None,
-                        }
-                    } else {
-                        Command::None
-                    }
-                }
-                "tg" => Command::RTCRead,
-                "ts" => {
-                    if n.len() > 5 {
-                        let year = n[0];
-                        Command::RTCWrite {
-                            century: (year / 100) as u8,
-                            year: (year % 100) as u8,
-                            month: n[1] as u8,
-                            day: n[2] as u8,
-                            hour: n[3] as u8,
-                            minute: n[4] as u8,
-                            second: n[5] as u8,
-                        }
-                    } else {
-                        Command::None
-                    }
-                }
-                "cr" => {
-                    if n.len() > 1 {
-                        Command::CMOSRead {
-                            address: n[0],
-                            size: n[1],
-                        }
-                    } else {
-                        Command::None
-                    }
-                }
-                "cw" => {
-                    if n.len() > 1 {
-                        Command::CMOSWrite {
-                            address: n[0],
-                            data: &d[1..d.len()],
-                        }
-                    } else {
-                        Command::None
-                    }
-                }
-                "fe" => {
-                    if n.len() > 0 {
-                        Command::FlashErase { sector: n[0] as u8 }
-                    } else {
-                        Command::None
-                    }
-                }
-                "fw" => {
-                    if n.len() > 2 {
-                        Command::FlashWrite {
-                            flash_address: n[0],
-                            data_address: n[1],
-                            size: n[2],
-                        }
-                    } else {
-                        Command::None
-                    }
-                }
-                _ => Command::None,
+        // separate the command strings
+        let mut tokens = [""; 18];
+        let t = collect_all(message.split_ascii_whitespace(), &mut tokens);
+
+        // convert all tokens to numbers
+        let mut numbers = [0usize; 18];
+        let n = &t[1..t.len()]
+            .iter()
+            .map(|s| usize::from_str_radix(s, 16).unwrap_or(0usize))
+            .collect_with_slice(&mut numbers);
+
+        // copy all of the numbers into the internal buffer as bytes
+        let d = n
+            .iter()
+            .map(|s| *s as u8)
+            .collect_with_slice(&mut self.buffer);
+
+        // parse the command
+        let command = match t[0] {
+            "ex" => {
+                check_length(&n, 1)?;
+                Command::Execute { address: n[0] }
             }
-        } else {
-            Command::None
-        }
+            "dm" => {
+                check_length(&n, 2)?;
+                Command::DumpMemory {
+                    address: n[0],
+                    size: n[1],
+                }
+            }
+            "wm" => {
+                check_length(&n, 2)?;
+                Command::WriteMemory {
+                    address: n[0],
+                    data: &d[1..d.len()]
+                }
+            }
+            "Ob" => {
+                check_length(&n, 2)?;
+                Command::IOWrite8 {
+                    address: n[0] as u16,
+                    data: n[1] as u8,
+                }
+            }
+            "Ow" => {
+                check_length(&n, 2)?;
+                Command::IOWrite16 {
+                    address: n[0] as u16,
+                    data: n[1] as u16,
+                }
+            }
+            "Od" => {
+                check_length(&n, 2)?;
+                Command::IOWrite32 {
+                    address: n[0] as u16,
+                    data: n[1] as u32,
+                }
+            }
+            "Ib" => {
+                check_length(&n, 1)?;
+                Command::IORead8 {
+                    address: n[0] as u16
+                }
+            }
+            "Iw" => {
+                check_length(&n, 1)?;
+                Command::IORead16 {
+                    address: n[0] as u16
+                }
+            }
+            "Id" => {
+                check_length(&n, 1)?;
+                Command::IORead32 {
+                    address: n[0] as u16
+                }
+            }
+            "tg" => Command::RTCRead,
+            "ts" => {
+                check_length(&n, 6)?;
+
+                let year = n[0];
+                Command::RTCWrite {
+                    century: (year / 100) as u8,
+                    year: (year % 100) as u8,
+                    month: n[1] as u8,
+                    day: n[2] as u8,
+                    hour: n[3] as u8,
+                    minute: n[4] as u8,
+                    second: n[5] as u8,
+                }
+            }
+            "cr" => {
+                check_length(&n, 2)?;
+                Command::CMOSRead {
+                    address: n[0],
+                    size: n[1],
+                }
+            }
+            "cw" => {
+                check_length(&n, 2)?;
+                Command::CMOSWrite {
+                    address: n[0],
+                    data: &d[1..d.len()],
+                }
+            }
+            "fe" => {
+                check_length(&n, 1);
+                Command::FlashErase { sector: n[0] as u8 }
+            }
+            "fw" => {
+                check_length(&n, 3);
+                Command::FlashWrite {
+                    flash_address: n[0],
+                    data_address: n[1],
+                    size: n[2],
+                }
+            }
+            _ => Command::None,
+        };
+        Some(command)
     }
 }
 
@@ -613,15 +599,6 @@ fn map_rtc() {
     setbits_rtc(0xB, 0b0000_0110);
 }
 
-fn display_hex<T: uWrite>(port: &mut T, value: usize, digits: usize) {
-    (0usize..digits).rev().fold(value, |rem, digit| {
-        let place = pow(16usize, digit);
-        port.write_char(char::from_digit((rem / place) as u32, 16).unwrap_or(' '))
-            .ok();
-        rem % place
-    });
-}
-
 fn display_slice_as_hex<T: uWrite>(port: &mut T, data: &[u8], address: usize) {
     // display each row of the hex dump
     (0..data.len()).step_by(16).for_each(|offset| {
@@ -629,15 +606,12 @@ fn display_slice_as_hex<T: uWrite>(port: &mut T, data: &[u8], address: usize) {
         let row = &data[offset..(offset + size)];
 
         // display the base address of the row
-        // display_hex could be solved by implementing it in ufmt
-        display_hex(port, address + offset, 8);
-        uwrite!(port, ":  ").ok();
+        uwrite!(port, "{:x}:  ", address + offset).ok();
 
         // display each hex character on the row
         (0..16).for_each(|i| {
             if i < row.len() {
-                display_hex(port, row[i] as usize, 2);
-                uwrite!(port, " ").ok();
+                uwrite!(port, "{:x} ", row[i]).ok();
             } else {
                 uwrite!(port, "   ").ok();
             }
@@ -691,7 +665,7 @@ pub extern "C" fn main() -> ! {
     // command parser utility
     let mut parser = CommandParser::new(uart);
     loop {
-        match parser.next_command() {
+        match parser.next_command().unwrap_or(Command::None) {
             Command::Execute { address } => {
                 uwriteln!(parser.port, "Execute is not implemented yet").ok();
             }
@@ -720,27 +694,15 @@ pub extern "C" fn main() -> ! {
             }
 
             Command::IORead8 { address } => {
-                uwrite!(parser.port, "inb (").ok();
-                display_hex(&mut parser.port, address as usize, 4);
-                uwrite!(parser.port, ") = ").ok();
-                display_hex(&mut parser.port, ioread8(address) as usize, 2);
-                uwriteln!(parser.port, "").ok();
+                uwriteln!(parser.port, "Ib ({:x}) = {:x}", address, ioread8(address)).ok();
             }
 
             Command::IORead16 { address } => {
-                uwrite!(parser.port, "inw (").ok();
-                display_hex(&mut parser.port, address as usize, 4);
-                uwrite!(parser.port, ") = ").ok();
-                display_hex(&mut parser.port, ioread16(address) as usize, 4);
-                uwriteln!(parser.port, "").ok();
+                uwriteln!(parser.port, "Iw ({:x}) = {:x}", address, ioread16(address)).ok();
             }
 
             Command::IORead32 { address } => {
-                uwrite!(parser.port, "inl (").ok();
-                display_hex(&mut parser.port, address as usize, 4);
-                uwrite!(parser.port, ") = ").ok();
-                display_hex(&mut parser.port, ioread32(address) as usize, 8);
-                uwriteln!(parser.port, "").ok();
+                uwriteln!(parser.port, "Id ({:x}) = {:x}", address, ioread32(address)).ok();
             }
 
             Command::RTCRead => {

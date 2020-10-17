@@ -2,7 +2,7 @@ INPUT(startup.o)
 ENTRY(_reset)
 
 ROM_BASE   = 0x03400000;
-REAL_BASE  = 0x1F40;
+REAL_BASE  = 0x1F30;
 RESET_BASE = 0x1FF0;
 
 MEMORY

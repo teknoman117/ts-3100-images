@@ -98,6 +98,29 @@ _start:
     movw $0x8000, %ax
     outw %ax, (%dx)
 
+    # Chip Select Unit 4 -> DOC -> 000D_8000 -> 000D_9FFF
+    # (0000_00) 00_0000_1101_1000_0[000_0000_0000]
+    # mask
+    # (0000_00) 00_0000_0000_0001_1[111_1111_1111]
+
+    # CS4ADH
+    movw $0xF422, %dx
+    movw $0x000D, %ax
+    outw %ax, (%dx)
+    # CS4ADL
+    movw $0xF420, %dx
+    movw $0x8503, %ax
+    outw %ax, (%dx)
+    # CS4MSKH
+    movw $0xF426, %dx
+    # movw $0x0000, %ax
+    xorl %eax, %eax
+    outw %ax, (%dx)
+    # CS4MSKL
+    movw $0xF424, %dx
+    movw $0x1C01, %ax
+    outw %ax, (%dx)
+
     # --- ----------------------------------------------
 
     # load gdt

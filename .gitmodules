@@ -1,0 +1,4 @@
+[submodule "rustimage/ufmt"]
+	path = rustimage/ufmt
+	url = git@github.com:teknoman117/ufmt
+	branch = hex-formatter
