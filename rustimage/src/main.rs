@@ -203,6 +203,11 @@ fn set_led(on: bool) {
     };
 }
 
+fn toggle_led() {
+    let value = ioread8(0xF862) & 0x40u8;
+    iowrite8(0xF862, value ^ 0x40u8);
+}
+
 // basic types which represent the base addresses of 16450 serial ports
 struct COM1 {}
 struct COM2 {}
@@ -261,8 +266,10 @@ where
     }
 
     fn writechar(&self, c: char) {
+        while (ioread8(/*0x2FD*/ Port::register(5)) & 0x20) == 0 {
+            core::sync::atomic::spin_loop_hint();
+        }
         iowrite8(/*0x2F8*/ Port::register(0), c as u8);
-        while (ioread8(/*0x2FD*/ Port::register(5)) & 0x20) == 0 {}
     }
 
     fn readchar(&self) -> Result<u8, u8> {
@@ -270,6 +277,7 @@ where
         let mut status = 0;
         while status == 0 {
             status = ioread8(/*0x2FD*/ Port::register(5)) & 0x8B;
+            core::sync::atomic::spin_loop_hint();
         }
 
         // return character if it wasn't an error
@@ -277,6 +285,10 @@ where
             0 => Ok(ioread8(/*0x2F8*/ Port::register(0))),
             _ => Err(status),
         }
+    }
+
+    fn status(&self) -> u8 {
+        ioread8(Port::register(5)) & 0x8B
     }
 
     fn iter(&self) -> COMPortIterator<Port> {
@@ -410,6 +422,10 @@ enum Command<'a> {
         data_address: usize,
         size: usize,
     },
+    ReceiveXMODEM {
+        address: usize,
+        size: usize,
+    },
 }
 
 fn check_length<'a, T>(slice: &'a [T], length: usize) -> Option<&'a [T]> {
@@ -478,7 +494,7 @@ where
                 check_length(&n, 2)?;
                 Command::WriteMemory {
                     address: n[0],
-                    data: &d[1..d.len()]
+                    data: &d[1..d.len()],
                 }
             }
             "Ob" => {
@@ -505,19 +521,19 @@ where
             "Ib" => {
                 check_length(&n, 1)?;
                 Command::IORead8 {
-                    address: n[0] as u16
+                    address: n[0] as u16,
                 }
             }
             "Iw" => {
                 check_length(&n, 1)?;
                 Command::IORead16 {
-                    address: n[0] as u16
+                    address: n[0] as u16,
                 }
             }
             "Id" => {
                 check_length(&n, 1)?;
                 Command::IORead32 {
-                    address: n[0] as u16
+                    address: n[0] as u16,
                 }
             }
             "tg" => Command::RTCRead,
@@ -550,15 +566,22 @@ where
                 }
             }
             "fe" => {
-                check_length(&n, 1);
+                check_length(&n, 1)?;
                 Command::FlashErase { sector: n[0] as u8 }
             }
             "fw" => {
-                check_length(&n, 3);
+                check_length(&n, 3)?;
                 Command::FlashWrite {
                     flash_address: n[0],
                     data_address: n[1],
                     size: n[2],
+                }
+            }
+            "rx" => {
+                check_length(&n, 2)?;
+                Command::ReceiveXMODEM {
+                    address: n[0],
+                    size: n[1],
                 }
             }
             _ => Command::None,
@@ -639,12 +662,161 @@ fn display_slice_as_hex<T: uWrite>(port: &mut T, data: &[u8], address: usize) {
     });
 }
 
+static mut TIMER0_VALUE: u16 = 0u16;
+
+// a necessary evil without interrupts
+fn timer0_reload() {
+    // startup PIT timer channel 0 (lobyte/highbyte mode)
+    // divide by 50,000 (expires once per second)
+    iowrite8(0x43u16, 0x30);
+    iowrite8(0x40u16, 0x50u8);
+    iowrite8(0x40u16, 0xC3u8);
+
+    // record current value of the timer (this would be solved by interrupts)
+    iowrite8(0x43u16, 0x00u8);
+    let lobyte: u16 = ioread8(0x40u16) as u16;
+    let hibyte: u16 = ioread8(0x40u16) as u16;
+    unsafe { TIMER0_VALUE = (hibyte << 8) | lobyte; }
+}
+
+// a necessary evil without interrupts
+fn timer0_hasexpired() -> bool {
+    iowrite8(0x43u16, 0x00u8);
+    let lobyte: u16 = ioread8(0x40u16) as u16;
+    let hibyte: u16 = ioread8(0x40u16) as u16;
+    let value = (hibyte << 8) | lobyte;
+    
+    (value > 0xC350) && (value != unsafe { TIMER0_VALUE })
+}
+
+// compute the crc16 of some data
+fn calculate_crc16(data: &[u8]) -> u16
+{
+    data.iter().fold(0u16, |crc, d| {
+        let i = crc ^ ((*d as u16) << 8);
+        (0..8).fold(i, |crc_b, _| {
+            if crc_b & 0x8000 != 0 {
+                (crc_b << 1) ^ 0x1021u16
+            } else {
+                crc_b << 1
+            }
+        })
+    })
+}
+
+fn xmodem_next_char<Port>(port: &mut COM<Port>) -> Result<u8, u8>
+where
+    Port: COMBaseAddress,
+{
+    // await a character
+    loop {
+        // did we time out?
+        if (timer0_hasexpired()) {
+            timer0_reload();
+            port.writechar('C');
+        }
+
+        // check the status
+        let status = port.status();
+        if status & 0x8A != 0 {
+            let _ = port.readchar();
+            return Err(status);
+        } else if status & 0x01 == 1 {
+            return port.readchar();
+        }
+
+        // hint at this being a busy loop
+        core::sync::atomic::spin_loop_hint();
+    }
+}
+
+fn perform_xmodem_receive<Port>(port: &mut COM<Port>, data: &mut [u8])
+where
+    Port : COMBaseAddress,
+{
+    /*for _ in 0..15 {
+        timer0_reload();
+        while !timer0_hasexpired() {
+            core::sync::atomic::spin_loop_hint();
+        }
+    }
+    port.writechar('C');*/
+    timer0_reload();
+
+    // loop until ETB is received
+    let mut block = 0usize;
+    loop {
+        let mut buffer = [0u8; 132];
+        let mut error = false;
+
+        // get the packet byte
+        match xmodem_next_char(port) {
+            Ok(h) => match h {
+                0x01 => {}
+                0x04 => {
+                    // end of transmission
+                    port.writechar(0x06 as char);
+                    break;
+                },
+                _ => {
+                    port.writechar(0x15 as char); 
+                    continue;
+                }
+            }
+            Err(_) => {
+                port.writechar(0x15 as char); 
+                continue;
+            }
+        };
+
+        // wait to receive
+        set_led(true);
+        let mut datum = buffer.iter_mut();
+        while let Some(d) = datum.next() {
+            loop {
+                match xmodem_next_char(port) {
+                    Ok(b) => {
+                        *d = b;
+                        break;
+                    }
+                    Err(_) => { error = true; }
+                }
+            }
+        }
+
+        // perform a crc16 check of the data
+        let crc16_hi: u16 = buffer[130] as u16;
+        let crc16_lo: u16 = buffer[131] as u16;
+        let crc16 = (crc16_hi << 8) | crc16_lo;
+        if (crc16 != calculate_crc16(&buffer[2..130])) || error {
+            // nack
+            timer0_reload();
+            port.writechar(0x15 as char);
+        } else {
+            // copy data
+            let remaining = data.len() - block;
+            let block_end = block + core::cmp::min(128, remaining);
+            let chunk_end = 2 + core::cmp::min(128, remaining);
+            &data[block..block_end].clone_from_slice(&buffer[2..chunk_end]);
+            block = block_end;
+
+            // ack
+            timer0_reload();
+            port.writechar(0x06 as char);
+        }
+        set_led(false);
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn main() -> ! {
     // initialize the heap
     /*unsafe {
         HEAP.init(0x10000, 0x10000);
     }*/
+
+    // divide the clock by 500 for timers (25 MHz / 500 = 50 KHz)
+    iowrite16(0xF804u16, 0x1F2u16);
 
     // turn off on board led
     set_led(false);
@@ -653,7 +825,7 @@ pub extern "C" fn main() -> ! {
     map_rtc();
 
     // setup 115200 8n1 with no interrupts
-    let mut uart = COM::<COM2>::setup(115200);
+    let mut uart = COM::<COM2>::setup(38400);
     uwriteln!(uart, "386EX Monitor").ok();
     uwriteln!(
         uart,
@@ -786,6 +958,12 @@ pub extern "C" fn main() -> ! {
                 size,
             } => {
                 uwriteln!(parser.port, "Flash Write is not implemented yet").unwrap();
+            }
+
+            Command::ReceiveXMODEM { address, size } => {
+                let slice =
+                    unsafe { core::slice::from_raw_parts_mut(address as *mut u8, size) };
+                perform_xmodem_receive(&mut parser.port, slice);
             }
 
             _ => uwriteln!(parser.port, "Unknown command").unwrap(),
