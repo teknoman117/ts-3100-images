@@ -105,20 +105,24 @@ _start:
 
     # CS4ADH
     movw $0xF422, %dx
-    movw $0x000D, %ax
+    # movw $0x000D, %ax
+    mov $0x0010, %ax
     outw %ax, (%dx)
     # CS4ADL
     movw $0xF420, %dx
-    movw $0x8503, %ax
+    # movw $0x8503, %ax
+    mov $0x0505, %ax
     outw %ax, (%dx)
     # CS4MSKH
     movw $0xF426, %dx
     # movw $0x0000, %ax
-    xorl %eax, %eax
+    # xorl %eax, %eax
+    mov $0x0007, %ax
     outw %ax, (%dx)
     # CS4MSKL
     movw $0xF424, %dx
-    movw $0x1C01, %ax
+    # movw $0x1C01, %ax
+    mov $0xFC01, %ax
     outw %ax, (%dx)
 
     # --- ----------------------------------------------

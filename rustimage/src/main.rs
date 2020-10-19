@@ -203,10 +203,10 @@ fn set_led(on: bool) {
     };
 }
 
-fn toggle_led() {
+/*fn toggle_led() {
     let value = ioread8(0xF862) & 0x40u8;
     iowrite8(0xF862, value ^ 0x40u8);
-}
+}*/
 
 // basic types which represent the base addresses of 16450 serial ports
 struct COM1 {}
@@ -676,7 +676,9 @@ fn timer0_reload() {
     iowrite8(0x43u16, 0x00u8);
     let lobyte: u16 = ioread8(0x40u16) as u16;
     let hibyte: u16 = ioread8(0x40u16) as u16;
-    unsafe { TIMER0_VALUE = (hibyte << 8) | lobyte; }
+    unsafe {
+        TIMER0_VALUE = (hibyte << 8) | lobyte;
+    }
 }
 
 // a necessary evil without interrupts
@@ -685,13 +687,12 @@ fn timer0_hasexpired() -> bool {
     let lobyte: u16 = ioread8(0x40u16) as u16;
     let hibyte: u16 = ioread8(0x40u16) as u16;
     let value = (hibyte << 8) | lobyte;
-    
+
     (value > 0xC350) && (value != unsafe { TIMER0_VALUE })
 }
 
 // compute the crc16 of some data
-fn calculate_crc16(data: &[u8]) -> u16
-{
+fn calculate_crc16(data: &[u8]) -> u16 {
     data.iter().fold(0u16, |crc, d| {
         let i = crc ^ ((*d as u16) << 8);
         (0..8).fold(i, |crc_b, _| {
@@ -711,7 +712,7 @@ where
     // await a character
     loop {
         // did we time out?
-        if (timer0_hasexpired()) {
+        if timer0_hasexpired() {
             timer0_reload();
             port.writechar('C');
         }
@@ -732,7 +733,7 @@ where
 
 fn perform_xmodem_receive<Port>(port: &mut COM<Port>, data: &mut [u8])
 where
-    Port : COMBaseAddress,
+    Port: COMBaseAddress,
 {
     /*for _ in 0..15 {
         timer0_reload();
@@ -757,14 +758,14 @@ where
                     // end of transmission
                     port.writechar(0x06 as char);
                     break;
-                },
+                }
                 _ => {
-                    port.writechar(0x15 as char); 
+                    port.writechar(0x15 as char);
                     continue;
                 }
-            }
+            },
             Err(_) => {
-                port.writechar(0x15 as char); 
+                port.writechar(0x15 as char);
                 continue;
             }
         };
@@ -779,7 +780,9 @@ where
                         *d = b;
                         break;
                     }
-                    Err(_) => { error = true; }
+                    Err(_) => {
+                        error = true;
+                    }
                 }
             }
         }
@@ -839,7 +842,11 @@ pub extern "C" fn main() -> ! {
     loop {
         match parser.next_command().unwrap_or(Command::None) {
             Command::Execute { address } => {
-                uwriteln!(parser.port, "Execute is not implemented yet").ok();
+                uwriteln!(parser.port, "call {:x}", address).ok();
+                unsafe {
+                    let program: unsafe extern "C" fn() = core::mem::transmute(address);
+                    program();
+                }
             }
 
             Command::DumpMemory { address, size } => {
@@ -949,7 +956,33 @@ pub extern "C" fn main() -> ! {
             }
 
             Command::FlashErase { sector } => {
-                uwriteln!(parser.port, "Flash Erase is not implemented yet").unwrap();
+                uwriteln!(parser.port, "Confirm erase of sector {} (y/n)? ", sector).unwrap();
+                if let Ok(c) = parser.port.readchar() {
+                    uwriteln!(parser.port, "").unwrap();
+                    match c as char {
+                        'Y' | 'y' => {
+                            uwriteln!(parser.port, "Erasing sector").unwrap();
+                            let sector_address = 0x100000usize + ((sector as usize) << 16);
+                            unsafe {
+                                // perform erase
+                                core::ptr::write_volatile(0x100555usize as *mut u8, 0xAAu8);
+                                core::ptr::write_volatile(0x1002AAusize as *mut u8, 0x55u8);
+                                core::ptr::write_volatile(0x100555usize as *mut u8, 0x80u8);
+                                core::ptr::write_volatile(0x100555usize as *mut u8, 0xAAu8);
+                                core::ptr::write_volatile(0x1002AAusize as *mut u8, 0x55u8);
+                                core::ptr::write_volatile(sector_address as *mut u8, 0x30u8);
+
+                                while (core::ptr::read_volatile(sector_address as *const u8) & 0x80)
+                                    == 0
+                                {
+                                    core::sync::atomic::spin_loop_hint();
+                                }
+                            }
+                            uwriteln!(parser.port, "Erase complete").unwrap();
+                        }
+                        _ => uwriteln!(parser.port, "Erase cancelled").unwrap(),
+                    }
+                }
             }
 
             Command::FlashWrite {
@@ -957,12 +990,36 @@ pub extern "C" fn main() -> ! {
                 data_address,
                 size,
             } => {
-                uwriteln!(parser.port, "Flash Write is not implemented yet").unwrap();
+                let data = unsafe { core::slice::from_raw_parts(data_address as *const u8, size) };
+                (0..size).step_by(1024).for_each(|offset| {
+                    let row_size = core::cmp::min(1024, data.len() - offset);
+                    let row = &data[offset..(offset + row_size)];
+                    uwriteln!(
+                        parser.port,
+                        "writing {} bytes to flash at {:x}",
+                        row_size,
+                        flash_address + offset
+                    )
+                    .ok();
+
+                    (0..row_size).for_each(|i| {
+                        let faddr = 0x100000usize + flash_address + offset + i;
+                        unsafe {
+                            // perform write
+                            core::ptr::write_volatile(0x100555usize as *mut u8, 0xAAu8);
+                            core::ptr::write_volatile(0x1002AAusize as *mut u8, 0x55u8);
+                            core::ptr::write_volatile(0x100555usize as *mut u8, 0xA0u8);
+                            core::ptr::write_volatile(faddr as *mut u8, row[i]);
+                            while core::ptr::read_volatile(faddr as *const u8) != row[i] {
+                                core::sync::atomic::spin_loop_hint();
+                            }
+                        }
+                    });
+                });
             }
 
             Command::ReceiveXMODEM { address, size } => {
-                let slice =
-                    unsafe { core::slice::from_raw_parts_mut(address as *mut u8, size) };
+                let slice = unsafe { core::slice::from_raw_parts_mut(address as *mut u8, size) };
                 perform_xmodem_receive(&mut parser.port, slice);
             }
 
