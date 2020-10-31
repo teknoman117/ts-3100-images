@@ -98,6 +98,28 @@ _start:
     movw $0x8000, %ax
     outw %ax, (%dx)
 
+    # Chip Select Unit 0 -> Flash Memory -> 0348_0000 -> 034F_FFFF
+    # (0000_00) 11_1000_1000_0000_0[000_0000_0000]
+    # mask
+    # (0000_00) 00_0000_0111_1111_1[111_1111_1111]
+
+    # CS0ADH
+    movw $0xF402, %dx
+    mov $0x0348, %ax
+    outw %ax, (%dx)
+    # CS0ADL
+    movw $0xF400, %dx
+    mov $0x0505, %ax
+    outw %ax, (%dx)
+    # CS0MSKH
+    movw $0xF406, %dx
+    mov $0x0007, %ax
+    outw %ax, (%dx)
+    # CS0MSKL
+    movw $0xF404, %dx
+    mov $0xFC01, %ax
+    outw %ax, (%dx)
+
     # Chip Select Unit 4 -> DOC -> 000D_8000 -> 000D_9FFF
     # (0000_00) 00_0000_1101_1000_0[000_0000_0000]
     # mask
@@ -105,24 +127,20 @@ _start:
 
     # CS4ADH
     movw $0xF422, %dx
-    # movw $0x000D, %ax
-    mov $0x0010, %ax
+    movw $0x000D, %ax
     outw %ax, (%dx)
     # CS4ADL
     movw $0xF420, %dx
-    # movw $0x8503, %ax
-    mov $0x0505, %ax
+    movw $0x8503, %ax
     outw %ax, (%dx)
     # CS4MSKH
     movw $0xF426, %dx
     # movw $0x0000, %ax
-    # xorl %eax, %eax
-    mov $0x0007, %ax
+    xorl %eax, %eax
     outw %ax, (%dx)
     # CS4MSKL
     movw $0xF424, %dx
-    # movw $0x1C01, %ax
-    mov $0xFC01, %ax
+    movw $0x1C01, %ax
     outw %ax, (%dx)
 
     # --- ----------------------------------------------
@@ -165,10 +183,10 @@ _protected:
 
     # relocate rom to normal region
     # will disable access to RORAM region
-    # Change UCS to 0340_0000 -> 0340_1FFF
+    # Change UCS to 0340_0000 -> 034F_FFFF
     # 11_0100_0000_0000_0[000_0000_0000]
     # mask
-    # (0000_00) 00_0000_0000_0001_1[111_1111_1111]
+    # (0000_00) 00_0000_1111_1111_1[111_1111_1111]
 
     # UCSADH
     movw $0xF43A, %dx
@@ -180,12 +198,11 @@ _protected:
     outw %ax, (%dx)
     # UCSMSKH
     movw $0xF43E, %dx
-    # movw $0x0000, %ax
-    xorl %eax, %eax
+    movw $0x000F, %ax
     outw %ax, (%dx)
     # UCSMSKL
     movw $0xF43C, %dx
-    movw $0x1C01, %ax
+    movw $0xFC01, %ax
     outw %ax, (%dx)
 
     # zero .bss segment
