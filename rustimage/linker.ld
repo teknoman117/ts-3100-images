@@ -1,9 +1,11 @@
 INPUT(startup.o)
 ENTRY(_reset)
 
-ROM_BASE   = 0x03400000;
-REAL_BASE  = 0x1F10;
-RESET_BASE = 0x1FF0;
+ROM_BASE     = 0x03480000;
+REAL_BASE    = 0x0000FF10;
+RESET_BASE   = 0x0000FFF0;
+REAL_OFFSET  = 0x0007FF10;
+RESET_OFFSET = 0x0007FFF0;
 
 MEMORY
 {
@@ -12,7 +14,7 @@ MEMORY
     /* BIOS mirror memory (read only after init) */ 
     RORAM : ORIGIN = 0x000F0000, LENGTH = 64K
     /* ROM */
-    ROM : ORIGIN = 0x03400000, LENGTH = 8K
+    ROM : ORIGIN = 0x03480000, LENGTH = 512K
 }
 
 SECTIONS
@@ -99,12 +101,12 @@ SECTIONS
     } > ROM
 
     /* real mode initialization */
-    .init16 REAL_BASE : AT(ORIGIN(ROM) + REAL_BASE)
+    .init16 REAL_BASE : AT(ORIGIN(ROM) + REAL_OFFSET)
     {
         *(.init16);
     } > ROM
 
-    .reset RESET_BASE : AT(ORIGIN(ROM) + RESET_BASE)
+    .reset RESET_BASE : AT(ORIGIN(ROM) + RESET_OFFSET)
     {
         *(.reset);
     } > ROM

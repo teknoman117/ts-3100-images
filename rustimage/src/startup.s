@@ -98,28 +98,6 @@ _start:
     movw $0x8000, %ax
     outw %ax, (%dx)
 
-    # Chip Select Unit 0 -> Flash Memory -> 0348_0000 -> 034F_FFFF
-    # (0000_00) 11_1000_1000_0000_0[000_0000_0000]
-    # mask
-    # (0000_00) 00_0000_0111_1111_1[111_1111_1111]
-
-    # CS0ADH
-    movw $0xF402, %dx
-    mov $0x0348, %ax
-    outw %ax, (%dx)
-    # CS0ADL
-    movw $0xF400, %dx
-    mov $0x0505, %ax
-    outw %ax, (%dx)
-    # CS0MSKH
-    movw $0xF406, %dx
-    mov $0x0007, %ax
-    outw %ax, (%dx)
-    # CS0MSKL
-    movw $0xF404, %dx
-    mov $0xFC01, %ax
-    outw %ax, (%dx)
-
     # Chip Select Unit 4 -> DOC -> 000D_8000 -> 000D_9FFF
     # (0000_00) 00_0000_1101_1000_0[000_0000_0000]
     # mask
