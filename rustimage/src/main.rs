@@ -961,15 +961,15 @@ pub extern "C" fn main() -> ! {
                     uwriteln!(parser.port, "").unwrap();
                     match c as char {
                         'Y' | 'y' => {
-                            uwriteln!(parser.port, "Erasing sector").unwrap();
-                            let sector_address = 0x03480000usize + ((sector as usize) << 16);
+                            let sector_address = 0x03400000usize + ((sector as usize) << 16);
+                            uwriteln!(parser.port, "Erasing sector at {:x}", sector_address).unwrap();
                             unsafe {
                                 // perform erase
-                                core::ptr::write_volatile(0x03480555usize as *mut u8, 0xAAu8);
-                                core::ptr::write_volatile(0x034802AAusize as *mut u8, 0x55u8);
-                                core::ptr::write_volatile(0x03480555usize as *mut u8, 0x80u8);
-                                core::ptr::write_volatile(0x03480555usize as *mut u8, 0xAAu8);
-                                core::ptr::write_volatile(0x034802AAusize as *mut u8, 0x55u8);
+                                core::ptr::write_volatile(0x03400555usize as *mut u8, 0xAAu8);
+                                core::ptr::write_volatile(0x034002AAusize as *mut u8, 0x55u8);
+                                core::ptr::write_volatile(0x03400555usize as *mut u8, 0x80u8);
+                                core::ptr::write_volatile(0x03400555usize as *mut u8, 0xAAu8);
+                                core::ptr::write_volatile(0x034002AAusize as *mut u8, 0x55u8);
                                 core::ptr::write_volatile(sector_address as *mut u8, 0x30u8);
 
                                 while (core::ptr::read_volatile(sector_address as *const u8) & 0x80)
@@ -1003,12 +1003,12 @@ pub extern "C" fn main() -> ! {
                     .ok();
 
                     (0..row_size).for_each(|i| {
-                        let faddr = 0x03480000usize + flash_address + offset + i;
+                        let faddr = 0x03400000usize + flash_address + offset + i;
                         unsafe {
                             // perform write
-                            core::ptr::write_volatile(0x03480555usize as *mut u8, 0xAAu8);
-                            core::ptr::write_volatile(0x034802AAusize as *mut u8, 0x55u8);
-                            core::ptr::write_volatile(0x03480555usize as *mut u8, 0xA0u8);
+                            core::ptr::write_volatile(0x03400555usize as *mut u8, 0xAAu8);
+                            core::ptr::write_volatile(0x034002AAusize as *mut u8, 0x55u8);
+                            core::ptr::write_volatile(0x03400555usize as *mut u8, 0xA0u8);
                             core::ptr::write_volatile(faddr as *mut u8, row[i]);
                             while core::ptr::read_volatile(faddr as *const u8) != row[i] {
                                 core::sync::atomic::spin_loop_hint();
